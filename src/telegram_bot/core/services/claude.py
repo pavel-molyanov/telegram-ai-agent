@@ -198,8 +198,16 @@ class SessionManager:
 
     @property
     def file_cache_dir(self) -> str:
-        """Public access to the media-download cache directory (core setting)."""
-        return self._settings.file_cache_dir
+        """Media cache path exposed to handlers as an absolute path.
+
+        Agents run with per-topic cwd, which can be different from the bot
+        repo. Relative media paths would then be resolved against the wrong
+        project when the agent uses Read.
+        """
+        configured = Path(self._settings.file_cache_dir)
+        if not configured.is_absolute():
+            configured = Path(self._settings.project_root) / configured
+        return str(configured.resolve())
 
     def default_mcp_config_path(self) -> str:
         """Default MCP config path used by bot-launched sessions."""
@@ -415,7 +423,7 @@ class SessionManager:
                 cwd=cwd,
             )
 
-        output_dir = Path(self._settings.file_cache_dir) / "codex-last-message"
+        output_dir = Path(self.file_cache_dir) / "codex-last-message"
         output_dir.mkdir(parents=True, exist_ok=True)
         with contextlib.suppress(OSError):
             output_dir.chmod(0o700)
@@ -591,7 +599,7 @@ class SessionManager:
         runtime_mcp_path: Path | None = None
         try:
             runtime_mcp_path = (
-                Path(self._settings.file_cache_dir)
+                Path(self.file_cache_dir)
                 / "mcp-runtime"
                 / f"{session.chat_id}-{session.thread_id}-{time.time_ns()}.json"
             )

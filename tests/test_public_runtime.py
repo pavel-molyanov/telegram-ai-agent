@@ -8,6 +8,7 @@ from telegram_bot.core.config import Settings
 from telegram_bot.core.handlers import commands
 from telegram_bot.core.handlers.tail import handle_tail_command
 from telegram_bot.core.services import cc_modes
+from telegram_bot.core.services.claude import SessionManager
 from telegram_bot.core.services.providers import CODEX_ADAPTER, choose_available_engine
 from telegram_bot.core.services.topic_config import TopicConfig
 
@@ -22,6 +23,29 @@ def test_public_settings_default_cwd_is_generic(monkeypatch) -> None:
     assert settings.project_root == "."
     assert settings.default_cwd == "."
     assert settings.topic_config_path == "./topic_config.json"
+
+
+def test_public_relative_file_cache_dir_is_agent_readable(tmp_path: Path) -> None:
+    root = tmp_path / "bot"
+    settings = Settings(
+        _env_file=None,
+        telegram_bot_token="test-token",
+        project_root=str(root),
+        default_cwd=".",
+        file_cache_dir="./data",
+    )
+    session_manager = SessionManager(settings)
+
+    assert session_manager.file_cache_dir == str((root / "data").resolve())
+
+
+def test_public_start_wires_live_buffer_before_restore_all() -> None:
+    source = Path("src/telegram_bot/__main__.py").read_text(encoding="utf-8")
+
+    assert "tmux_manager.wire_live_buffer(bot=bot, topic_config=topic_config)" in source
+    assert source.index("tmux_manager.wire_live_buffer") < source.index(
+        "tmux_manager.restore_all"
+    )
 
 
 def test_public_prompt_modes_are_available() -> None:

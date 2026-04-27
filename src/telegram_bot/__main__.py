@@ -96,6 +96,7 @@ async def _start() -> None:
     tmux_manager = TmuxManager(
         sessions_dir=Path(settings.project_root) / settings.tmux_sessions_dir,
     )
+    tmux_manager.wire_live_buffer(bot=bot, topic_config=topic_config)
     tmux_manager.restore_all()
     session_manager = SessionManager(settings, topic_config=topic_config)
     transcriber = Transcriber(settings)
@@ -147,8 +148,8 @@ async def _start() -> None:
     dp["topic_config"] = topic_config
     dp["tmux_manager"] = tmux_manager
 
-    ensure_tmp_dir(settings.file_cache_dir)
-    cleanup_old_tmp_files(settings.file_cache_dir)
+    ensure_tmp_dir(session_manager.file_cache_dir)
+    cleanup_old_tmp_files(session_manager.file_cache_dir)
     session_manager.load_mapping()
     session_manager.start_cleanup()
 
@@ -158,7 +159,7 @@ async def _start() -> None:
         while True:
             await asyncio.sleep(periodic_cleanup_interval)
             try:
-                deleted = cleanup_old_tmp_files(settings.file_cache_dir)
+                deleted = cleanup_old_tmp_files(session_manager.file_cache_dir)
                 logger.info("Periodic tmp cleanup: deleted %d files", deleted)
             except Exception:
                 logger.warning("Periodic tmp cleanup failed", exc_info=True)
