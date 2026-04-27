@@ -8,6 +8,7 @@ from telegram_bot.core.config import Settings
 from telegram_bot.core.handlers import commands
 from telegram_bot.core.handlers.tail import handle_tail_command
 from telegram_bot.core.services import cc_modes
+from telegram_bot.core.services.bot_commands import build_bot_commands
 from telegram_bot.core.services.claude import SessionManager
 from telegram_bot.core.services.providers import CODEX_ADAPTER, choose_available_engine
 from telegram_bot.core.services.topic_config import TopicConfig
@@ -137,6 +138,23 @@ def test_public_command_handlers_are_wired() -> None:
     assert commands.handle_mode_command is not None
     assert commands.handle_engine_command is not None
     assert handle_tail_command is not None
+
+
+def test_public_bot_command_menu_is_public_only() -> None:
+    command_names = {command.command for command in build_bot_commands("ru")}
+
+    assert "clear" in command_names
+    assert "tui" in command_names
+    assert "tail" in command_names
+    assert "new" not in command_names
+    assert "day" not in command_names
+
+
+def test_public_start_registers_bot_commands() -> None:
+    source = Path("src/telegram_bot/__main__.py").read_text(encoding="utf-8")
+
+    assert "setup_bot_commands(bot)" in source
+    assert source.index("setup_bot_commands(bot)") < source.index("dp.start_polling")
 
 
 def test_mcp_bot_server_imports() -> None:

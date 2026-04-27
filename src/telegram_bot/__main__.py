@@ -26,6 +26,7 @@ from telegram_bot.core.handlers.voice import router as voice_router
 from telegram_bot.core.keyboards import topic_keyboard
 from telegram_bot.core.messages import t
 from telegram_bot.core.middleware.auth import AuthMiddleware
+from telegram_bot.core.services.bot_commands import setup_bot_commands
 from telegram_bot.core.services.claude import SessionManager
 from telegram_bot.core.services.message_queue import MessageQueue
 from telegram_bot.core.services.tmux_manager import TmuxManager
@@ -91,6 +92,10 @@ async def _start() -> None:
 
     settings = get_settings()
     bot = Bot(token=settings.telegram_bot_token)
+    try:
+        await setup_bot_commands(bot)
+    except Exception:
+        logger.warning("Failed to set Telegram bot commands", exc_info=True)
 
     topic_config = TopicConfig(settings.topic_config_path, settings.project_root)
     tmux_manager = TmuxManager(
