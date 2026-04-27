@@ -1,0 +1,27 @@
+[Unit]
+Description=Claude/Codex Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_WITH_LINUX_USER
+WorkingDirectory=REPLACE_WITH_ABSOLUTE_REPO_PATH
+EnvironmentFile=REPLACE_WITH_ABSOLUTE_REPO_PATH/.env
+ExecStart=REPLACE_WITH_UV_PATH run telegram-bot
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+TimeoutStopSec=15
+KillMode=process
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=telegram-bot
+
+[Install]
+WantedBy=multi-user.target

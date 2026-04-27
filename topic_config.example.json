@@ -1,0 +1,29 @@
+{
+  "topics": {
+    "REPLACE_WITH_PROJECT_THREAD_ID": {
+      "name": "My Project",
+      "type": "project",
+      "mode": "free",
+      "cwd": "/path/to/your/project",
+      "mcp_config": "/path/to/your/project/.mcp.json",
+      "stream_mode": "live",
+      "exec_mode": "tmux",
+      "engine": "codex",
+      "model": null
+    },
+    "REPLACE_WITH_DEMO_THREAD_ID": {
+      "name": "Task demo",
+      "type": "assistant",
+      "mode": "task",
+      "cwd": null,
+      "mcp_config": null,
+      "stream_mode": "live",
+      "exec_mode": "subprocess",
+      "engine": "claude",
+      "model": null
+    }
+  },
+  "routing": {
+    "tasks": "REPLACE_WITH_DEMO_THREAD_ID"
+  }
+}

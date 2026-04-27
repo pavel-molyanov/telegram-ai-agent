@@ -1,0 +1,138 @@
+---
+name: topic-setup
+description: |
+  Create or configure Telegram forum topics for the public Claude/Codex
+  Telegram bot. Use when a topic needs a working directory, engine, execution
+  mode, stream mode, MCP config, or a custom prompt mode.
+---
+
+# Topic Setup
+
+Use this skill when the user wants a new Telegram forum topic or an existing
+topic needs to be connected to a project. Keep all edits public-safe and local
+to the user's checkout.
+
+## Inputs To Find
+
+Determine:
+
+- Current `chat_id` and `thread_id` from `<telegram-context>` when available.
+- `TELEGRAM_BOT_TOKEN` from `.env` or the environment.
+- Forum chat ID. Use `<telegram-context>` first; otherwise ask the user.
+- Project path for the topic, if this is a project topic.
+- Desired `engine`: `claude` or `codex`. Prefer Claude Code when both are
+  installed. If the configured engine is missing and the other engine exists,
+  runtime switches the topic to the available engine.
+- Desired `exec_mode`: `subprocess` for short tasks or `tmux` for persistent
+  coding sessions.
+- Desired `stream_mode`: usually `live`; alternatives are `verbose` and
+  `minimal`.
+- Optional provider `model`.
+
+## Create A Topic
+
+If the topic does not exist and the bot is an admin with forum topic rights,
+call Telegram Bot API:
+
+Read the bot token from the `TELEGRAM_BOT_TOKEN` environment variable or from
+the local `.env` file, then call `createForumTopic` with the forum chat ID and
+topic name. Do not print or commit the token.
+
+The response includes `message_thread_id`. Use it as the topic key in
+`topic_config.json`.
+
+If the bot has already auto-registered the topic, read `topic_config.json` and
+update the existing entry instead of creating a duplicate.
+
+Users can also create topics manually in Telegram. When the running bot receives
+the forum-topic service message, it auto-registers the topic in
+`topic_config.json` with generic defaults. The default runtime engine is
+`claude`; Codex-only installations automatically switch new topics to
+`engine=codex` on first use.
+
+## Configure A Topic
+
+Find the topic config path:
+
+```bash
+CONFIG_PATH="${TOPIC_CONFIG_PATH:-./topic_config.json}"
+```
+
+If `.env` sets `TOPIC_CONFIG_PATH`, use that value.
+
+For project topics:
+
+- Verify `cwd` exists with `test -d`.
+- Use an absolute path.
+- Set `type` to `project`.
+- Set `mode` to `free`. Public project topics use the normal generic prompt.
+- Set `mcp_config` to an absolute project MCP config path, or `null` to use the
+  bot-generated MCP config.
+- Set `engine`, `exec_mode`, `stream_mode`, and optional `model`.
+
+Example:
+
+```json
+{
+  "name": "My Project",
+  "type": "project",
+  "mode": "free",
+  "cwd": "/absolute/path/to/project",
+  "mcp_config": null,
+  "stream_mode": "live",
+  "exec_mode": "tmux",
+  "engine": "codex",
+  "model": null
+}
+```
+
+For the bundled demo assistant topic:
+
+```json
+{
+  "name": "Tasks",
+  "type": "assistant",
+  "mode": "task",
+  "cwd": null,
+  "mcp_config": null,
+  "stream_mode": "live",
+  "exec_mode": "subprocess",
+  "engine": "claude",
+  "model": null
+}
+```
+
+Write JSON with 2-space indentation and preserve existing unrelated topics.
+`TopicConfig` reloads by file mtime, so a restart is not needed for most field
+changes.
+
+## Public Prompt Modes
+
+The public repo ships with two prompt modes:
+
+- `free`: the standard project/general prompt for real work.
+- `task`: an example of a second prompt mode. Users can replace it with their
+  own prompt file and set topics to that custom mode.
+
+Do not add `knowledge`, `project`, `blog`, or other private prompt modes to
+public docs, examples, tests, or setup skills. If a user wants a custom mode,
+create a new public-safe prompt file and document that custom mode explicitly.
+
+## Confirm
+
+Tell the user:
+
+- Topic name and thread ID.
+- `cwd`.
+- `engine`.
+- `exec_mode`.
+- `stream_mode`.
+- Whether a restart is required.
+
+## Do Not
+
+- Do not write a `cwd` that does not exist.
+- Do not commit `.env`, `topic_config.json`, `.mcp*.json`, session JSON files,
+  `tmux_sessions/`, or `data/`.
+- Do not copy private prompts or local machine paths into public examples.
+- Do not delete topic entries just because a Telegram topic was removed.

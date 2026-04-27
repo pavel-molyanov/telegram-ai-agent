@@ -1,0 +1,33 @@
+# Testing
+
+Standard checks:
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy src/ mcp-servers/bot/server.py
+uv run pytest
+```
+
+Import smoke:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 uv run python -c "import telegram_bot; import telegram_bot.__main__"
+```
+
+Minimal public tests should cover:
+
+- config defaults;
+- prompt fallback;
+- topic config parsing;
+- provider parser smoke behavior;
+- MCP bot server importability;
+- no private default working directory;
+- public command wiring for `/mode`, `/engine`, `/stream`, `/tui`, and `/resume`.
+
+Manual Telegram QA is required before publication. Private deployed-bot QA is a
+regression signal; public-checkout/staging QA validates the public artifact.
+
+After local checks, remove generated artifacts before release staging:
+`.venv/`, `.ruff_cache/`, `.mypy_cache/`, `.pytest_cache/`, `__pycache__/`,
+`*.pyc`, and `*.pyo`.

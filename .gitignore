@@ -1,0 +1,54 @@
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials.json
+secrets/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Build
+dist/
+build/
+
+# Logs
+*.log
+logs/
+
+# Runtime state
+session_mapping.json
+channel_sessions.json
+tmux_sessions/
+data/
+.codex/.sync/
+
+# User config
+topic_config.json
+
+# Temp files
+tmp/
+*.tmp
+data/.tmp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+
+# MCP runtime configs (may contain credentials)
+.mcp.json
+.mcp.bot.json
