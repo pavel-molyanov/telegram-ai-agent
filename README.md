@@ -1,5 +1,7 @@
 # Telegram AI Agent
 
+[Русская версия](README.ru.md)
+
 Open-source Telegram bot for running Claude Code or Codex from Telegram private
 chats and forum topics. Each forum topic can have its own working directory,
 prompt mode, engine, execution mode, stream mode, model, and MCP config.
