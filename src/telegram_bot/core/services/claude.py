@@ -36,9 +36,15 @@ from telegram_bot.core.services.cc_events import (
 )
 from telegram_bot.core.services.cc_modes import (
     _MODE_TOOLS,
+    BLOG_MODE_PROMPT,
+    BLOG_MODE_TOOLS,
     DEFAULT_MODE,
     FREE_MODE_PROMPT,
     FREE_MODE_TOOLS,
+    KNOWLEDGE_MODE_PROMPT,
+    KNOWLEDGE_MODE_TOOLS,
+    PROJECT_MODE_PROMPT,
+    PROJECT_MODE_TOOLS,
     TASK_MODE_PROMPT,
     TASK_MODE_TOOLS,
     Mode,
@@ -58,9 +64,15 @@ logger = logging.getLogger(__name__)
 # (tmux_manager, streaming, handlers/*) use these names; listing them
 # in __all__ makes the re-export explicit for mypy.
 __all__ = [
+    "BLOG_MODE_PROMPT",
+    "BLOG_MODE_TOOLS",
     "DEFAULT_MODE",
     "FREE_MODE_PROMPT",
     "FREE_MODE_TOOLS",
+    "KNOWLEDGE_MODE_PROMPT",
+    "KNOWLEDGE_MODE_TOOLS",
+    "PROJECT_MODE_PROMPT",
+    "PROJECT_MODE_TOOLS",
     "TASK_MODE_PROMPT",
     "TASK_MODE_TOOLS",
     "TOOL_STATUS_MAP",

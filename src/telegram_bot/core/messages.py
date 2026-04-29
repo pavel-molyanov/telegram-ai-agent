@@ -189,8 +189,17 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cc.unknown_channel": "Unknown channel",
         "cc.unknown_chat": "Unknown chat",
         "cc.file_default": "file",
-        "cc.file_path": "File: {path}",
-        "cc.file_caption": "[Photo with caption]: {caption}\nFile: {path}",
+        # Wrap path in `[...]` so the Claude Code TUI bracketed-paste
+        # splitter (split on `' /'` and `\n`, then match each token
+        # against `/\.(png|jpe?g|gif|webp)$/i`) does NOT pick the path
+        # up as an auto-attach image candidate. Without the brackets,
+        # the async attach races the bot's Enter key and the model
+        # sees `File:` empty (regression after the bracketed-paste
+        # delivery switch on 2026-04-26). With `[...]` the token ends
+        # in `]`, regex misses, path stays as text, agent reads it via
+        # Read tool — the pre-2026-04-26 working behaviour.
+        "cc.file_path": "File: [{path}]",
+        "cc.file_caption": "[Photo with caption]: {caption}\nFile: [{path}]",
         "cc.batch_during_processing": ("[Messages received during processing ({count} total)]:"),
         "cc.reply_context": ("[Message the user replied to]:\n{context}\n\n[User reply]:\n{reply}"),
         "cc.message_truncated": "\n[...message truncated]",
@@ -199,7 +208,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "cc.forward_from": "From: {name}",
         "cc.forward_post_link": "Post link: {link}",
         "cc.forward_date": "Date: {date}",
-        "cc.attached_file": "Attached file (read via Read): {path}",
+        # See `cc.file_path` comment — same `[...]` wrap defeats the
+        # Claude TUI image-attach splitter for `.png/.jpg/.gif/.webp`
+        # forwarded as documents.
+        "cc.attached_file": "Attached file (read via Read): [{path}]",
         "cc.caption": "Caption: {caption}",
         "cc.user_comment": "User comment: {comment}",
         "cc.photo_error": "[Photo: {error}]",

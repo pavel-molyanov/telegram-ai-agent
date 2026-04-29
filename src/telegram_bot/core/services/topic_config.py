@@ -42,7 +42,7 @@ Engine = Literal["claude", "codex"]
 _VALID_ENGINES: set[str] = {"claude", "codex"}
 _DEFAULT_ENGINE: Engine = "claude"
 _MODEL_OVERRIDE_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
-_CORE_PROMPT_MODES: set[str] = {"task", "free"}
+_CORE_PROMPT_MODES: set[str] = {"task", "knowledge", "free", "project", "blog"}
 
 _valid_modes_cache: tuple[int, set[str]] = (-1, set())
 
@@ -75,7 +75,7 @@ class TopicSettings:
 
     name: str
     type: str  # "assistant" | "project"
-    mode: str  # public default modes: "free" | "task"; custom prompt file stems also work
+    mode: str  # "task" | "knowledge" | "free" | "project"
     cwd: str | None  # None → Settings.default_cwd
     mcp_config: str | None  # None → default (.mcp.bot.json)
     stream_mode: StreamMode = _DEFAULT_STREAM_MODE

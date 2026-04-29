@@ -715,7 +715,14 @@ async def send_streaming_response(
                 if mid not in sent_message_ids:
                     sent_message_ids.append(mid)
 
-    _ = git_sync
+    # Notify git sync for knowledge mode (fire-and-forget)
+    if git_sync is not None:
+        mode = session_manager.get_mode(channel_key)
+        if mode == "knowledge":
+            try:
+                git_sync.notify()
+            except RuntimeError:
+                logger.debug("Git sync notify skipped, event loop closing")
 
     # In tmux mode, results are sent immediately via result_message events.
     # Don't use accumulated_text as fallback — it spans multiple interactions

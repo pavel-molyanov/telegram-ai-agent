@@ -40,7 +40,11 @@ def resolve_topic_runtime_config(
     mcp_config = (
         settings.mcp_config if settings.mcp_config is not None else str(defaults.mcp_config)
     )
-    mode = settings.mode if settings.mode in {"task", "free"} else defaults.mode
+    mode = (
+        settings.mode
+        if settings.mode in {"task", "knowledge", "free", "blog", "project"}
+        else defaults.mode
+    )
     return TopicRuntimeConfig(
         cwd=cwd,
         mode=mode,  # type: ignore[arg-type]

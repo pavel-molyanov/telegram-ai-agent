@@ -44,9 +44,7 @@ def test_public_start_wires_live_buffer_before_restore_all() -> None:
     source = Path("src/telegram_bot/__main__.py").read_text(encoding="utf-8")
 
     assert "tmux_manager.wire_live_buffer(bot=bot, topic_config=topic_config)" in source
-    assert source.index("tmux_manager.wire_live_buffer") < source.index(
-        "tmux_manager.restore_all"
-    )
+    assert source.index("tmux_manager.wire_live_buffer") < source.index("tmux_manager.restore_all")
 
 
 def test_public_prompt_modes_are_available() -> None:

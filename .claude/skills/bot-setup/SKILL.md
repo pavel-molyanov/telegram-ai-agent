@@ -120,7 +120,7 @@ Create `/etc/systemd/system/telegram-bot.service`:
 
 ```ini
 [Unit]
-Description=Telegram AI Agent
+Description=Claude/Codex Telegram Bot
 After=network-online.target
 Wants=network-online.target
 
