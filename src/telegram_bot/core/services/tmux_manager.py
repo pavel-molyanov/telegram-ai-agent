@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import re
 import subprocess
@@ -230,6 +231,15 @@ class TmuxManager:
         # (Decision 7). Cleared once the tail sees the file.
         self._spawn_deadlines: dict[ChannelKey, float] = {}
         self._codex_start_snapshots: dict[ChannelKey, tuple[set[Path], float]] = {}
+        # Channels whose most recent _spawn_tmux passed prompt-readiness but
+        # failed the input probe (probe budget elapsed without the test char
+        # appearing in the input bar). Set by `_spawn_tmux`, consumed by
+        # `start_session` to skip kill-on-failure and register the session
+        # anyway with `session_id=None`. Runtime-only — not persisted in
+        # state.json. After bot restart, `restore_all` reattaches the tmux
+        # session as a normal one; the modal watchdog will re-discover any
+        # still-open modal on its next tick.
+        self._probe_blocked: set[ChannelKey] = set()
         # LiveStatusBuffer per channel — owned by TmuxManager because the tail
         # loop outlives a single user message. Typed as object to avoid a
         # circular import on LiveStatusBuffer.
@@ -356,6 +366,40 @@ class TmuxManager:
         """Return current CC session_id for a channel."""
         state = self._sessions.get(channel_key)
         return state.session_id if state else None
+
+    @staticmethod
+    def expected_epoch(state: TmuxSessionState) -> str:
+        """8-hex epoch for inline-keyboard callback_data binding.
+
+        When the session has a real CC session_id, the first 8 hex chars
+        are the keyboard epoch (as before). When session_id is None — the
+        codex cold-start case where input is blocked by a startup-modal
+        and codex hasn't yet written its session_meta jsonl — derive a
+        stable 8-hex synthetic epoch from the tmux session_name. Same
+        format as a real epoch, passes the `[0-9a-f]{8}` regex in
+        `tail_keyboard.parse_tail_callback`. The synthetic epoch is
+        deterministic per channel, so a `/tui` keyboard built before the
+        real session_id materialises stays valid across re-renders; once
+        the real session_id arrives, the old synthetic keyboard becomes
+        stale (epoch mismatch) and the user is prompted to call /tui
+        again — same UX as after `/new`.
+        """
+        if state.session_id:
+            return state.session_id[:8]
+        # Non-cryptographic — just a stable derivation per session_name.
+        # `usedforsecurity=False` silences Bandit B324.
+        return hashlib.sha1(state.session_name.encode(), usedforsecurity=False).hexdigest()[:8]
+
+    def get_expected_epoch(self, channel_key: ChannelKey) -> str | None:
+        """Public helper for callback handlers: epoch for an active session.
+
+        Returns None when there is no registered session for the channel.
+        For registered sessions, falls back to a synthetic epoch when
+        the underlying CC session_id is not yet known (startup-modal
+        blocked codex cold-start). See `expected_epoch` for details.
+        """
+        state = self._sessions.get(channel_key)
+        return self.expected_epoch(state) if state else None
 
     def get_provider_model(self, channel_key: ChannelKey) -> tuple[str | None, str | None]:
         """Return (provider, model) for the live tmux session, or (None, None).
@@ -517,20 +561,49 @@ class TmuxManager:
             )
             raise
 
-        await self._edit_engine_loading_message(loading_msg, t("ui.engine_ready", engine=provider))
+        # `_spawn_tmux` may have succeeded structurally (tmux up + prompt
+        # ready) but the input probe failed — typically because a startup
+        # modal is blocking the input handler. In that case tmux is left
+        # alive (see _spawn_tmux) and the channel is flagged in
+        # `_probe_blocked`. Register the session anyway so /tui passes
+        # `is_active(key)` and the modal watchdog sees it; pick a
+        # different loading-message text so the user knows to open /tui.
+        is_probe_blocked = channel_key in self._probe_blocked
+        if is_probe_blocked:
+            await self._edit_engine_loading_message(
+                loading_msg,
+                t("ui.engine_started_input_blocked", engine=provider),
+            )
+        else:
+            await self._edit_engine_loading_message(
+                loading_msg, t("ui.engine_ready", engine=provider)
+            )
 
+        # The codex transcript discovery snapshot must be saved on BOTH
+        # the happy path AND the probe-blocked path. After the user
+        # dismisses the modal through /tui and sends their first real
+        # message, `_locate_codex_transcript_after_send` diffs the
+        # post-send jsonl listing against this snapshot to find the new
+        # session_id. Without it, that lookup would scan an empty
+        # baseline and pick up unrelated transcripts.
         if provider == "codex" and resume_session_id is None:
             self._codex_start_snapshots[channel_key] = (existing, since_wall)
 
         self._sessions[channel_key] = state
         self._save_state()
+        # Now that the session is registered, drop the probe-blocked flag.
+        # Future spawns (clear_context / new) start fresh; the flag only
+        # bridges the in-progress _spawn_tmux → start_session handoff.
+        self._probe_blocked.discard(channel_key)
         logger.info(
-            "Started tmux session %s for channel %s (resume=%s, session_id=%s, offset=%d)",
+            "Started tmux session %s for channel %s "
+            "(resume=%s, session_id=%s, offset=%d, probe_blocked=%s)",
             name,
             channel_key,
             resume_session_id is not None,
             session_id,
             initial_offset,
+            is_probe_blocked,
         )
 
     async def _spawn_tmux(
@@ -555,6 +628,15 @@ class TmuxManager:
           session; we translate that to `RuntimeError` for the caller.
         """
         session_dir.mkdir(parents=True, exist_ok=True)
+        # Clear any leftover probe-blocked flag from a previous spawn on
+        # this channel before we start fresh. Other callers of
+        # `_spawn_tmux` (clear_context, switch_session, _swap_session_id)
+        # don't read the flag themselves, so without this discard a
+        # stale flag from a prior session could leak into the next
+        # `start_session` and falsely claim "blocked" when the probe
+        # actually succeeded this time around.
+        if channel_key is not None:
+            self._probe_blocked.discard(channel_key)
         await asyncio.to_thread(
             subprocess.run, ["tmux", "kill-session", "-t", name], capture_output=True
         )
@@ -619,10 +701,25 @@ class TmuxManager:
         get_bar_fn = codex_input_bar_content if provider == "codex" else claude_input_bar_content
         ready_input = await self._probe_input_ready(name, get_input_bar_fn=get_bar_fn)
         if not ready_input:
-            await asyncio.to_thread(
-                subprocess.run, ["tmux", "kill-session", "-t", name], capture_output=True
+            # Don't kill tmux. A failed probe is the strongest universal
+            # signal that input is blocked — almost always a startup
+            # modal (codex update prompt, trust dialog, accept-terms,
+            # any future codex/claude release with a new modal). The
+            # text-based whitelist in `is_modal_present` cannot keep up
+            # with new modals, but the empirical "the dot never landed"
+            # signal is universal. Keep tmux alive so the user can see
+            # the pane through `/tui` and dismiss the modal manually;
+            # the modal watchdog will also discover it on the next tick.
+            # `start_session` checks this set and registers the session
+            # in `_sessions` with `session_id=None` so /tui passes its
+            # is_active guard.
+            if channel_key is not None:
+                self._probe_blocked.add(channel_key)
+            logger.warning(
+                "TUI_IO: probe_failed_session_kept session=%s channel=%s",
+                name,
+                channel_key,
             )
-            raise RuntimeError("CC TUI input probe failed")
 
         if channel_key is not None:
             # Hand the remaining budget to the next _tail_until_done so its

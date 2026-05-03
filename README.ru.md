@@ -319,6 +319,10 @@ entry.
 - посмотреть, что сейчас делает агент;
 - нажать Enter, Esc, arrows, Tab, Backspace, Ctrl+C или цифры;
 - обработать permission dialogs;
+- закрыть startup modal (например update prompt у Codex или trust dialog) —
+  если агент показал модал во время старта и бот не смог пробить ввод, в чате
+  появится "engine started but input is blocked, use /tui"; открой `/tui` и
+  закрой диалог кнопками;
 - выйти из состояния, которое выглядит как зависшая TUI.
 
 `/tail` - legacy alias для `/tui`.

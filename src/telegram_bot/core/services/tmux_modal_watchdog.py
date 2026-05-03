@@ -184,14 +184,23 @@ async def send_modal_alert(
     back to its trigger via `journalctl | grep`.
     """
     bot = manager._bot
-    if bot is None or state.session_id is None:
+    if bot is None:
         return
+    # `state.session_id` may be None on a startup-modal-blocked codex
+    # cold-start: codex assigns its session_id only after writing the
+    # session_meta jsonl, which doesn't happen until the user sends
+    # their first real prompt. Use a synthetic epoch derived from the
+    # tmux session_name so the inline keyboard's callback_data stays
+    # valid; once codex materialises the real session_id, the old
+    # synthetic-epoch keyboard becomes stale (epoch mismatch in the
+    # callback handler) and the user is prompted to call /tui again.
+    epoch = manager.expected_epoch(state)
     text = ""
     try:
         text, keyboard = render_modal_alert(
             prompt=prompt,
             pane=pane,
-            session_id=state.session_id,
+            session_id=epoch,
             chat_id=channel_key[0],
             thread_id=channel_key[1],
         )
@@ -241,13 +250,16 @@ async def send_modal_idle_alert(
     user-prompt echo. Writes to the same `_last_modal_pane` dedup map so
     a second watchdog tick on the unchanged pane is a no-op."""
     bot = manager._bot
-    if bot is None or state.session_id is None:
+    if bot is None:
         return
+    # See `send_modal_alert` for why a synthetic epoch is acceptable
+    # when state.session_id is None (codex startup-modal cold-start).
+    epoch = manager.expected_epoch(state)
     text = ""
     try:
         text, keyboard = render_modal_idle_alert(
             pane=pane,
-            session_id=state.session_id,
+            session_id=epoch,
             chat_id=channel_key[0],
             thread_id=channel_key[1],
         )

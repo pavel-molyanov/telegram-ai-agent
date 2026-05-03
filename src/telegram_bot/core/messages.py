@@ -52,6 +52,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "ui.engine_ready": "✅ {engine} is ready.",
         "ui.engine_start_failed": "⚠️ {engine} failed to start: {exc}",
+        "ui.engine_started_input_blocked": (
+            "⚠️ {engine} started but input is blocked — most likely a modal dialog."
+            " Use /tui to see the pane and dismiss it."
+        ),
         # --- UI: tail / tui feature strings (Wave 3 tmux-tui-mode) ----
         "ui.tail_unavailable": (
             "⚠️ No active tmux session — /tui is unavailable."
@@ -277,6 +281,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         ),
         "ui.engine_ready": "✅ {engine} готов к работе.",
         "ui.engine_start_failed": "⚠️ {engine} не запустился: {exc}",
+        "ui.engine_started_input_blocked": (
+            "⚠️ {engine} запустился, но ввод заблокирован — скорее всего модальное окно."
+            " Открой /tui, чтобы увидеть экран сессии и закрыть его."
+        ),
         # --- UI: tail / tui feature strings (Wave 3 tmux-tui-mode) ----
         "ui.tail_unavailable": (
             "⚠️ Нет активной tmux-сессии — /tui недоступен."

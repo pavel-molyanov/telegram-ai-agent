@@ -315,6 +315,10 @@ Use `/tui` to:
 - inspect what the agent is doing;
 - press Enter, Esc, arrows, Tab, Backspace, Ctrl+C, or digits;
 - handle permission dialogs;
+- handle startup modals (e.g. Codex's update prompt or trust dialog) — when
+  the agent shows a modal during initial spawn and the bot can't push input
+  through, you'll see "engine started but input is blocked, use /tui";
+  open `/tui` and dismiss the modal with the keyboard;
 - recover from a stuck-looking interactive state.
 
 `/tail` is a legacy alias for `/tui`.

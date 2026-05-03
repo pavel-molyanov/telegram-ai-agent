@@ -179,10 +179,15 @@ async def _handle_tail_entry(
         return
 
     session_name = _resolve_session_name(tmux_manager, key)
-    session_id = tmux_manager.get_session_id(key)
-    if session_name is None or session_id is None:
+    # `get_expected_epoch` returns the real session_id[:8] when known,
+    # otherwise a synthetic 8-hex derived from session_name. The latter
+    # path is hit on a startup-modal-blocked codex cold-start (tmux is
+    # alive, the user can see the pane and dismiss the modal through
+    # the keyboard, but codex hasn't yet written its session_meta).
+    epoch = tmux_manager.get_expected_epoch(key)
+    if session_name is None or epoch is None:
         # is_active said True, but state vanished between calls — treat as
-        # unavailable rather than crashing on None session_id.
+        # unavailable rather than crashing on None state.
         await message.answer(t("ui.tail_unavailable"))
         return
 
@@ -202,7 +207,7 @@ async def _handle_tail_entry(
     raw_pane = result.stdout or ""
     pane_html = _format_pane_html(raw_pane)
     keyboard = build_tail_keyboard(
-        session_id=session_id,
+        session_id=epoch,
         chat_id=message.chat.id,
         thread_id=message.message_thread_id,
     )
@@ -264,8 +269,15 @@ async def handle_tail_callback(callback: CallbackQuery, tmux_manager: TmuxManage
         await callback.answer(t("ui.tail_keyboard_stale"), show_alert=True)
         return
 
-    current_sid = tmux_manager.get_session_id(key)
-    if current_sid is None or current_sid[:8] != parsed.epoch:
+    # Match the keyboard epoch against either the real session_id[:8]
+    # or, when codex hasn't yet materialised its session_id (startup-
+    # modal cold-start), the synthetic sha1(session_name)[:8]. After
+    # the user dismisses the modal and codex writes its session_meta,
+    # the real session_id replaces the synthetic and OLD keyboards
+    # become stale here — that's the same UX as after `/new`, which is
+    # acceptable: the user simply calls /tui to get a fresh keyboard.
+    expected_epoch = tmux_manager.get_expected_epoch(key)
+    if expected_epoch is None or expected_epoch != parsed.epoch:
         await callback.answer(t("ui.tail_keyboard_stale"), show_alert=True)
         return
 
@@ -297,7 +309,7 @@ async def handle_tail_callback(callback: CallbackQuery, tmux_manager: TmuxManage
             message=message,
             tmux_manager=tmux_manager,
             session_name=session_name,
-            session_id=current_sid,
+            epoch=expected_epoch,
             chat_id=parsed.chat_id,
             thread_id=parsed.thread_id,
             kind=parsed.kind,
@@ -331,7 +343,7 @@ async def handle_tail_callback(callback: CallbackQuery, tmux_manager: TmuxManage
         message=message,
         tmux_manager=tmux_manager,
         session_name=session_name,
-        session_id=current_sid,
+        epoch=expected_epoch,
         chat_id=parsed.chat_id,
         thread_id=parsed.thread_id,
         kind=parsed.kind,
@@ -347,12 +359,19 @@ async def _rerender(
     message: Message,
     tmux_manager: TmuxManager,
     session_name: str,
-    session_id: str,
+    epoch: str,
     chat_id: int,
     thread_id: int | None,
     kind: str = KIND_PANEL,
 ) -> None:
     """Capture the pane and edit the /tui message in place.
+
+    `epoch` is the 8-hex callback-data binding key. It's either the
+    real `session_id[:8]` or — when codex hasn't yet materialised its
+    session_id (startup-modal-blocked cold-start) — a synthetic
+    sha1(session_name)[:8]. `build_tail_keyboard` and the modal-alert
+    renderers accept any 8-hex string here; they truncate with `[:8]`
+    so passing a pre-computed epoch is a no-op slice.
 
     `kind` picks the layout:
       - `panel` (default): bare `<pre>pane</pre>` — regular /tui snapshot.
@@ -384,14 +403,14 @@ async def _rerender(
     if kind == KIND_MODAL:
         text, keyboard = render_modal_idle_alert(
             pane=raw_pane,
-            session_id=session_id,
+            session_id=epoch,
             chat_id=chat_id,
             thread_id=thread_id,
         )
     else:
         text = _format_pane_html(raw_pane)
         keyboard = build_tail_keyboard(
-            session_id=session_id,
+            session_id=epoch,
             chat_id=chat_id,
             thread_id=thread_id,
         )
