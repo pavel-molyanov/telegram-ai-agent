@@ -551,7 +551,7 @@ async def capture_pane(session_name: str) -> str:
     try:
         result = await asyncio.to_thread(
             subprocess.run,
-            ["tmux", "capture-pane", "-t", f"={session_name}", "-p"],
+            ["tmux", "capture-pane", "-t", f"={session_name}:", "-p"],
             capture_output=True,
             text=True,
             check=False,

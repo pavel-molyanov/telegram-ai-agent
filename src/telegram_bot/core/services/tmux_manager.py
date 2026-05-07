@@ -742,7 +742,7 @@ class TmuxManager:
             ):
                 await asyncio.to_thread(
                     subprocess.run,
-                    ["tmux", "send-keys", "-t", f"={session_name}", "1", "Enter"],
+                    ["tmux", "send-keys", "-t", f"={session_name}:", "1", "Enter"],
                     capture_output=True,
                     check=False,
                 )
@@ -2058,7 +2058,7 @@ class TmuxManager:
         if state:
             logger.info("TUI_IO: cancel session=%s", state.session_name)
             subprocess.run(
-                ["tmux", "send-keys", "-t", f"={state.session_name}", "Escape"],
+                ["tmux", "send-keys", "-t", f"={state.session_name}:", "Escape"],
                 capture_output=True,
             )
 

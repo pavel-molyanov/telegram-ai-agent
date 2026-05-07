@@ -84,7 +84,7 @@ async def query_pane_width(session_name: str) -> int | None:
     try:
         result = await asyncio.to_thread(
             subprocess.run,
-            ["tmux", "display-message", "-p", "-t", f"={session_name}", "#{pane_width}"],
+            ["tmux", "display-message", "-p", "-t", f"={session_name}:", "#{pane_width}"],
             capture_output=True,
             text=True,
             check=False,
