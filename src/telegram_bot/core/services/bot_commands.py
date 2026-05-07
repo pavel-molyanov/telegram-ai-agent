@@ -6,15 +6,22 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from aiogram.types import BotCommand
+from aiogram.types import (
+    BotCommand,
+    BotCommandScopeAllChatAdministrators,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+    BotCommandScopeUnion,
+)
 
 
 class BotCommandSetter(Protocol):
     async def set_my_commands(
         self,
         commands: list[BotCommand],
-        *,
+        scope: BotCommandScopeUnion | None = None,
         language_code: str | None = None,
+        request_timeout: int | None = None,
     ) -> bool: ...
 
 
@@ -70,10 +77,26 @@ async def setup_bot_commands(
     *,
     extra_commands: Sequence[LocalizedBotCommand] = (),
 ) -> None:
-    """Register default, Russian, and English command menus."""
+    """Register the same command menu in every scope a client may read.
+
+    Telegram resolves the command list per chat by walking scopes from most
+    specific (chat → all_chat_administrators → all_group_chats / all_private_chats)
+    down to default and returning the first non-empty list — it does not merge
+    them. Writing only to default leaves any pre-existing list in a narrower
+    scope shadowing the new commands. Writing the full list everywhere keeps
+    the menu consistent regardless of past state.
+    """
     ru_commands = build_bot_commands("ru", extra_commands=extra_commands)
     en_commands = build_bot_commands("en", extra_commands=extra_commands)
 
-    await bot.set_my_commands(ru_commands)
-    await bot.set_my_commands(ru_commands, language_code="ru")
-    await bot.set_my_commands(en_commands, language_code="en")
+    scopes: tuple[BotCommandScopeUnion | None, ...] = (
+        None,
+        BotCommandScopeAllPrivateChats(),
+        BotCommandScopeAllGroupChats(),
+        BotCommandScopeAllChatAdministrators(),
+    )
+
+    for scope in scopes:
+        await bot.set_my_commands(ru_commands, scope=scope)
+        await bot.set_my_commands(ru_commands, scope=scope, language_code="ru")
+        await bot.set_my_commands(en_commands, scope=scope, language_code="en")

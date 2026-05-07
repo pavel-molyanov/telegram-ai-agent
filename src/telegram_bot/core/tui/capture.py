@@ -70,7 +70,7 @@ def escape_pane_for_html(pane_text: str) -> str:
 
 def _capture_pane(session_name: str) -> str:
     result = subprocess.run(
-        ["tmux", "capture-pane", "-t", session_name, "-p", "-S", "-200"],
+        ["tmux", "capture-pane", "-t", f"={session_name}", "-p", "-S", "-200"],
         check=True,
         capture_output=True,
         text=True,
@@ -80,14 +80,14 @@ def _capture_pane(session_name: str) -> str:
 
 def _send_enter(session_name: str) -> None:
     subprocess.run(
-        ["tmux", "send-keys", "-t", session_name, "Enter"],
+        ["tmux", "send-keys", "-t", f"={session_name}", "Enter"],
         check=True,
     )
 
 
 def _kill_session(session_name: str) -> None:
     subprocess.run(
-        ["tmux", "kill-session", "-t", session_name],
+        ["tmux", "kill-session", "-t", f"={session_name}"],
         check=False,
     )
 

@@ -104,7 +104,7 @@ def _capture_pane_cmd(session_name: str) -> list[str]:
         "tmux",
         "capture-pane",
         "-t",
-        session_name,
+        f"={session_name}",
         "-p",
         "-S",
         f"-{_CAPTURE_SCROLLBACK_LINES}",
@@ -112,7 +112,7 @@ def _capture_pane_cmd(session_name: str) -> list[str]:
 
 
 def _send_keys_cmd(session_name: str, keys: list[str]) -> list[str]:
-    return ["tmux", "send-keys", "-t", session_name, *keys]
+    return ["tmux", "send-keys", "-t", f"={session_name}", *keys]
 
 
 def _format_pane_html(raw_pane: str) -> str:

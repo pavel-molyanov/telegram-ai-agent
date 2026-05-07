@@ -102,7 +102,7 @@ async def send_paste(session_name: str, text: str) -> None:
         loaded = True
         await asyncio.to_thread(
             subprocess.run,
-            ["tmux", "paste-buffer", "-p", "-b", buffer_name, "-t", session_name],
+            ["tmux", "paste-buffer", "-p", "-b", buffer_name, "-t", f"={session_name}"],
             check=True,
         )
     finally:
@@ -145,7 +145,7 @@ async def send_text_to_tmux(
     if submit_enter:
         await asyncio.to_thread(
             subprocess.run,
-            ["tmux", "send-keys", "-t", session_name, "Enter"],
+            ["tmux", "send-keys", "-t", f"={session_name}", "Enter"],
             check=True,
         )
 
@@ -153,7 +153,7 @@ async def send_text_to_tmux(
 async def send_enter(session_name: str) -> None:
     await asyncio.to_thread(
         subprocess.run,
-        ["tmux", "send-keys", "-t", session_name, "Enter"],
+        ["tmux", "send-keys", "-t", f"={session_name}", "Enter"],
         check=True,
     )
 
@@ -161,7 +161,7 @@ async def send_enter(session_name: str) -> None:
 async def send_tab(session_name: str) -> None:
     await asyncio.to_thread(
         subprocess.run,
-        ["tmux", "send-keys", "-t", session_name, "Tab"],
+        ["tmux", "send-keys", "-t", f"={session_name}", "Tab"],
         check=True,
     )
 
@@ -169,6 +169,6 @@ async def send_tab(session_name: str) -> None:
 async def send_ctrl_u(session_name: str) -> None:
     await asyncio.to_thread(
         subprocess.run,
-        ["tmux", "send-keys", "-t", session_name, "C-u"],
+        ["tmux", "send-keys", "-t", f"={session_name}", "C-u"],
         check=True,
     )

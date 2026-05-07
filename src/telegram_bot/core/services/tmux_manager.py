@@ -638,7 +638,7 @@ class TmuxManager:
         if channel_key is not None:
             self._probe_blocked.discard(channel_key)
         await asyncio.to_thread(
-            subprocess.run, ["tmux", "kill-session", "-t", name], capture_output=True
+            subprocess.run, ["tmux", "kill-session", "-t", f"={name}"], capture_output=True
         )
 
         spawn_start = time.monotonic()
@@ -689,7 +689,7 @@ class TmuxManager:
             ready = await await_prompt_ready(name, timeout=remaining, clock=time.monotonic)
         if not ready:
             await asyncio.to_thread(
-                subprocess.run, ["tmux", "kill-session", "-t", name], capture_output=True
+                subprocess.run, ["tmux", "kill-session", "-t", f"={name}"], capture_output=True
             )
             raise RuntimeError("CC TUI start timeout")
 
@@ -742,7 +742,7 @@ class TmuxManager:
             ):
                 await asyncio.to_thread(
                     subprocess.run,
-                    ["tmux", "send-keys", "-t", session_name, "1", "Enter"],
+                    ["tmux", "send-keys", "-t", f"={session_name}", "1", "Enter"],
                     capture_output=True,
                     check=False,
                 )
@@ -753,7 +753,7 @@ class TmuxManager:
                 return True
             await asyncio.sleep(0.5)
         await asyncio.to_thread(
-            subprocess.run, ["tmux", "kill-session", "-t", session_name], capture_output=True
+            subprocess.run, ["tmux", "kill-session", "-t", f"={session_name}"], capture_output=True
         )
         return False
 
@@ -886,6 +886,18 @@ class TmuxManager:
         """True if a tail loop is already running for this channel."""
         return channel_key in self._cancel_events
 
+    @staticmethod
+    def _claude_input_changed(pane_before: str, pane_after: str) -> bool:
+        """True when Claude's input bar changed without verified delivery.
+
+        A changed bar means the paste likely affected the TUI, but the stricter
+        delivery guard could not prove it is fresh. Re-pasting in that state can
+        duplicate user input, so the send path stops and surfaces an alert.
+        """
+        before_bar = claude_input_bar_content(pane_before)
+        after_bar = claude_input_bar_content(pane_after)
+        return after_bar is not None and after_bar != before_bar
+
     async def _safe_send_and_enter(
         self,
         channel_key: ChannelKey,
@@ -959,6 +971,15 @@ class TmuxManager:
                     pane_after = pane_recheck
                     delivered = True
                     break
+                if self._claude_input_changed(pane_before, pane_recheck):
+                    logger.info(
+                        "TUI_IO: claude input changed without verified delivery "
+                        "session=%s attempt=%d; refusing repeat paste",
+                        session_name,
+                        paste_attempt,
+                    )
+                    pane_after = pane_recheck
+                    break
 
             try:
                 await send_text_to_tmux(session_name, prompt, submit_enter=False)
@@ -987,6 +1008,14 @@ class TmuxManager:
                     break
                 if prompt_visible_in_pane(pane_before, pane_after, prompt):
                     delivered = True
+                    break
+                if self._claude_input_changed(pane_before, pane_after):
+                    logger.info(
+                        "TUI_IO: claude input changed without verified delivery "
+                        "session=%s attempt=%d; refusing repeat paste",
+                        session_name,
+                        paste_attempt,
+                    )
                     break
                 if time.monotonic() >= deadline:
                     break
@@ -2029,7 +2058,7 @@ class TmuxManager:
         if state:
             logger.info("TUI_IO: cancel session=%s", state.session_name)
             subprocess.run(
-                ["tmux", "send-keys", "-t", state.session_name, "Escape"],
+                ["tmux", "send-keys", "-t", f"={state.session_name}", "Escape"],
                 capture_output=True,
             )
 
@@ -2416,7 +2445,7 @@ class TmuxManager:
         _ = channel_key
         await asyncio.to_thread(
             subprocess.run,
-            ["tmux", "kill-session", "-t", state.session_name],
+            ["tmux", "kill-session", "-t", f"={state.session_name}"],
             capture_output=True,
         )
 

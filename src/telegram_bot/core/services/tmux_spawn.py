@@ -66,7 +66,7 @@ def tmux_alive(session_name: str) -> bool:
     Kept synchronous because it is called from bot-startup (restore_all)
     and from non-async paths. Async callers should use `asyncio.to_thread`.
     """
-    result = subprocess.run(["tmux", "has-session", "-t", session_name], capture_output=True)
+    result = subprocess.run(["tmux", "has-session", "-t", f"={session_name}"], capture_output=True)
     return result.returncode == 0
 
 
@@ -84,7 +84,7 @@ async def query_pane_width(session_name: str) -> int | None:
     try:
         result = await asyncio.to_thread(
             subprocess.run,
-            ["tmux", "display-message", "-p", "-t", session_name, "#{pane_width}"],
+            ["tmux", "display-message", "-p", "-t", f"={session_name}", "#{pane_width}"],
             capture_output=True,
             text=True,
             check=False,
@@ -122,7 +122,7 @@ def spawn_tmux_sync(
     """
     try:
         session_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True)
+        subprocess.run(["tmux", "kill-session", "-t", f"={name}"], capture_output=True)
         result = subprocess.run(
             [
                 "tmux",
