@@ -130,6 +130,8 @@ from telegram_bot.core.tui.modal_detect import (
 )
 from telegram_bot.core.tui.paths import generate_session_uuid, transcript_path
 from telegram_bot.core.tui.send_keys import (
+    PASTE_MODE_CHAR_THRESHOLD,
+    send_ctrl_u,
     send_enter,
     send_paste,
     send_text_to_tmux,
@@ -169,6 +171,20 @@ _CODEX_PASTE_POLL_STEP_SEC = 0.1
 _CLAUDE_PASTE_RETRY_LIMIT = 3
 _CLAUDE_PASTE_POLL_BUDGET_SEC = 1.0
 _CLAUDE_PASTE_POLL_STEP_SEC = 0.1
+
+# `_send_with_modal_guard` settle pauses. Bracketed paste lands as one
+# event in Claude TUI, but the renderer needs a frame to absorb it before
+# Enter — without a settle, Enter races the paste and either triggers
+# nothing (paste still buffering) or submits the previous bar content.
+# Long/multiline payloads need more time to render; short single-line
+# get a smaller window so latency stays low.
+#
+# Threshold is aliased to `PASTE_MODE_CHAR_THRESHOLD` from `send_keys` —
+# both name the Claude TUI paste-mode trigger; keeping them linked
+# prevents drift if the TUI changes its threshold.
+_GUARD_LONG_PROMPT_THRESHOLD = PASTE_MODE_CHAR_THRESHOLD
+_GUARD_SETTLE_LONG_SEC = 0.5
+_GUARD_SETTLE_SHORT_SEC = 0.25
 
 # Probe-input readiness gate. After the prompt glyph (codex `>` / claude `>` markers) appears we
 # still cannot trust that the underlying ratatui (or similar) event
@@ -898,6 +914,140 @@ class TmuxManager:
         after_bar = claude_input_bar_content(pane_after)
         return after_bar is not None and after_bar != before_bar
 
+    async def _send_with_modal_guard(
+        self,
+        channel_key: ChannelKey,
+        state: TmuxSessionState,
+        prompt: str,
+    ) -> bool:
+        """Simplified Claude send pipeline: modal pre-check → paste → settle
+        → modal recheck → Enter.
+
+        Replaces the paste-verify retry loop (`_safe_send_and_enter` legacy
+        path) for Claude sessions. The retry loop's `prompt_visible_in_pane`
+        check produced false BLOCKED on every Claude TUI re-skin: 4 fixes in
+        2 days on 2026-04-23..24, plus the 2026-05-07 incident with stacked
+        paste residue from a prior BLOCKED. Empirical work in
+        `work/reference/tgcc-server.js` (Oleg's bot) shows that paste
+        verification is unnecessary when bracketed-paste delivery is used —
+        a single settle pause between paste and Enter is sufficient.
+
+        Defence remaining: `is_modal_present` is checked twice — before the
+        paste and after — to ensure Enter never confirms a modal dialog.
+        That is the load-bearing safety guarantee; the rest of the legacy
+        verification was working around its own false positives.
+
+        Contract:
+          True  → Enter was sent.
+          False → `_send_modal_alert` already posted a user-facing alert.
+
+        Lock is taken by the caller (send_direct / send_stream); this method
+        must not re-acquire it (would deadlock).
+        """
+        session_name = state.session_name
+        logger.info(
+            "TUI_IO: send_with_modal_guard session=%s len=%d",
+            session_name,
+            len(prompt),
+        )
+
+        # Step 1 — pre-send modal check. A modal here means Claude is
+        # waiting on a dialog (model picker, /usage, trust, auto-compact);
+        # pasting+Enter would silently confirm a menu item.
+        pane_before = await capture_pane(session_name)
+        if is_modal_present(pane_before):
+            await self._send_modal_alert(
+                channel_key,
+                state,
+                prompt,
+                pane_before,
+                reason="claude_modal_before_send",
+            )
+            return False
+
+        # Step 2 — bracketed paste, no Enter yet.
+        try:
+            await send_text_to_tmux(session_name, prompt, submit_enter=False)
+        except (OSError, subprocess.SubprocessError):
+            logger.warning(
+                "TUI_IO: send_with_modal_guard send_text failed session=%s",
+                session_name,
+                exc_info=True,
+            )
+            await self._send_modal_alert(
+                channel_key,
+                state,
+                prompt,
+                pane_before,
+                reason="claude_send_error",
+            )
+            return False
+
+        # Step 3 — settle. Bracketed paste arrives as a single event but
+        # the TUI needs a frame to absorb it; without this Enter races the
+        # paste. Long/multiline payloads need more time to render the
+        # `[Pasted text #N]` chip / wrapped lines.
+        settle = (
+            _GUARD_SETTLE_LONG_SEC
+            if len(prompt) > _GUARD_LONG_PROMPT_THRESHOLD or "\n" in prompt
+            else _GUARD_SETTLE_SHORT_SEC
+        )
+        await asyncio.sleep(settle)
+
+        # Step 4 — post-paste modal check. Closes the race where a modal
+        # popped between the pre-check and now (auto-compact prompt, MCP
+        # auth, idle hooks). Cleanup with Ctrl+U so the orphaned paste
+        # does not stack onto the next message's input bar — that was the
+        # 2026-05-07 incident class.
+        pane_after_paste = await capture_pane(session_name)
+        if is_modal_present(pane_after_paste):
+            try:
+                await send_ctrl_u(session_name)
+            except (OSError, subprocess.SubprocessError):
+                # Best-effort — log and continue to alert. User must not
+                # be left in silence even if cleanup itself fails.
+                logger.warning(
+                    "TUI_IO: send_with_modal_guard C-u cleanup failed session=%s",
+                    session_name,
+                    exc_info=True,
+                )
+            await self._send_modal_alert(
+                channel_key,
+                state,
+                prompt,
+                pane_after_paste,
+                reason="claude_modal_after_send",
+            )
+            return False
+
+        # Step 5 — Enter. No retry: a single Enter is sufficient on
+        # bracketed-paste delivery (Oleg's bot uses one Enter; our Enter-
+        # retry loop was working around its own false-detection of
+        # "prompt didn't clear", not a real Enter delivery issue).
+        try:
+            await send_enter(session_name)
+        except (OSError, subprocess.SubprocessError):
+            logger.warning(
+                "TUI_IO: send_with_modal_guard send_enter failed session=%s",
+                session_name,
+                exc_info=True,
+            )
+            await self._send_modal_alert(
+                channel_key,
+                state,
+                prompt,
+                pane_after_paste,
+                reason="claude_enter_send_error",
+            )
+            return False
+
+        logger.info(
+            "TUI_IO: send_with_modal_guard delivered session=%s settle=%.2fs",
+            session_name,
+            settle,
+        )
+        return True
+
     async def _safe_send_and_enter(
         self,
         channel_key: ChannelKey,
@@ -920,6 +1070,21 @@ class TmuxManager:
         session_name = state.session_name
         if state.provider == "codex":
             return await self._safe_send_codex(channel_key, state, prompt)
+
+        # Claude path: simplified modal-guard pipeline. The legacy paste-
+        # retry / Enter-retry loop below is unreachable dead code, kept on
+        # purpose for one iteration so a `git revert` of the dispatch line
+        # restores the old behaviour without a textual conflict.
+        #
+        # TODO(2026-05-15): if no rollback incidents, remove the dead block
+        # below (everything in this method after this return), the helper
+        # `_send_enter_until_prompt_clears`, the static `_claude_input_changed`,
+        # the orphaned `session_name` local on the previous line, the
+        # `_CLAUDE_PASTE_RETRY_LIMIT` / `_CLAUDE_PASTE_POLL_*` constants, and
+        # the three direct-invocation tests of `_send_enter_until_prompt_clears`
+        # in tests/test_tmux_wave3_fixes.py (lines 131, 164, 200) which only
+        # pin the unreachable behaviour.
+        return await self._send_with_modal_guard(channel_key, state, prompt)
 
         baseline_captured_at = time.monotonic()
         pane_before = await capture_pane(session_name)
