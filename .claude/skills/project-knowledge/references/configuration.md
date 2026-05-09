@@ -35,9 +35,11 @@ Topic fields:
 
 Runtime prefers Claude Code when both engines are available. If a topic is
 configured for a missing engine and the other CLI is installed, the bot switches
-the topic to the available engine and persists that change. If neither CLI is
-installed, the bot still starts and tells the user to install Claude Code or
-Codex.
+the topic to the available engine, persists that change, resets the active
+session id, and posts the same "engine changed, active session was reset" notice
+to the topic that a manual `/engine` switch would. The conversation never moves
+to a new provider silently. If neither CLI is installed, the bot still starts
+and tells the user to install Claude Code or Codex.
 
 Voice transcription requires a Deepgram API key in `DEEPGRAM_API_KEY`; leave it
 empty to disable voice messages.

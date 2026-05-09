@@ -900,8 +900,17 @@ class SessionManager:
         channel_key: ChannelKey,
         prompt: str,
         on_event: Callable[[StreamEvent], Awaitable[None] | None],
+        *,
+        on_engine_changed: Callable[[str], Awaitable[None]] | None = None,
     ) -> str:
-        """Send a prompt to CC with streaming events. Returns final response text."""
+        """Send a prompt to CC with streaming events. Returns final response text.
+
+        ``on_engine_changed`` fires once when an auto-fallback swaps the engine
+        (e.g. claude binary briefly missing during npm update). The caller is
+        responsible for surfacing this to the user — same wording as a manual
+        /engine switch — so the conversation does not silently move to a new
+        provider mid-flight.
+        """
         session = self._get_session(channel_key)
 
         async with session.lock:
@@ -935,6 +944,23 @@ class SessionManager:
                                 available_engine,
                                 thread_id,
                             )
+                # Mirror manual /engine cleanup: drop the prior provider's
+                # session_id so the new engine doesn't try to resume a foreign
+                # rollout (codex against claude's id raises "no rollout found"
+                # and forces a retry without resume — observed 2026-05-09).
+                await self._clear_session_state_locked(session)
+                self._clear_persisted_session(channel_key, mark_fresh=True)
+                if on_engine_changed is not None:
+                    # Callback failure must not block the stream — engine is
+                    # already swapped on disk, so the agent must still run even
+                    # if user notification fails (e.g. Telegram down).
+                    try:
+                        await on_engine_changed(available_engine)
+                    except Exception:
+                        logger.exception(
+                            "on_engine_changed callback failed for channel %s",
+                            channel_key,
+                        )
             session.cancelled = False
             last_error: Exception | None = None
 
@@ -1109,22 +1135,35 @@ class SessionManager:
             return None
         return self._sessions[channel_key].session_id
 
+    async def _clear_session_state_locked(self, session: SessionData) -> None:
+        """Reset SessionData state — caller must hold ``session.lock``.
+
+        Extracted so the auto-fallback branch in ``send_stream`` (already under
+        the lock) can mirror manual /engine cleanup without reentering the
+        non-reentrant ``asyncio.Lock``.
+        """
+        if session.process is not None:
+            await self._kill_process(session.process)
+            session.process = None
+        session.session_id = None
+        session.cancelled = False
+
+    def _clear_persisted_session(self, channel_key: ChannelKey, *, mark_fresh: bool = True) -> None:
+        """Drop persisted channel→session mapping. Lock-free; safe to call anywhere."""
+        ch_key = self._ch_key(channel_key)
+        self._channel_sessions.pop(ch_key, None)
+        self._save_channel_sessions()
+        if mark_fresh:
+            self._fresh_channels.add(ch_key)
+
     async def clear_provider_session(
         self, channel_key: ChannelKey, *, mark_fresh: bool = True
     ) -> None:
         """Clear in-memory and persisted subprocess session for engine/model changes."""
         session = self._get_session(channel_key)
         async with session.lock:
-            if session.process is not None:
-                await self._kill_process(session.process)
-                session.process = None
-            session.session_id = None
-            session.cancelled = False
-        ch_key = self._ch_key(channel_key)
-        self._channel_sessions.pop(ch_key, None)
-        self._save_channel_sessions()
-        if mark_fresh:
-            self._fresh_channels.add(ch_key)
+            await self._clear_session_state_locked(session)
+        self._clear_persisted_session(channel_key, mark_fresh=mark_fresh)
 
     # --- Message → session_id mapping (reply-to-resume) ---
 

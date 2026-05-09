@@ -282,6 +282,19 @@ async def ensure_exec_mode_ready(
                         available_engine,
                         thread_id,
                     )
+            # Mirror manual /engine: drop the prior engine's session_id and notify
+            # the user with the same wording. Without this the user only learns
+            # about the swap by noticing lost context after the fact.
+            await session_manager.clear_provider_session(key)
+            try:
+                await source_msg.answer(
+                    t("ui.engine_changed_new_session", engine=engine_display_name(engine))
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to deliver tmux engine-changed notice on channel %s",
+                    key,
+                )
 
         # Always spawn fresh — never --resume from peek_saved_session here.
         # Lazy-start-with-resume caused a silent delivery desync in production:
@@ -690,6 +703,23 @@ async def send_streaming_response(
                 )
                 await _handle_event_verbose(ctx, event)
 
+    async def _notify_engine_changed(new_engine: str) -> None:
+        """Surface auto-fallback the same way manual /engine does — same wording.
+
+        Fires before the agent's response so the user sees the engine change
+        rather than only inferring it from lost context. Catch broadly: a
+        notification failure must never block the agent from running.
+        """
+        try:
+            await message.answer(
+                t("ui.engine_changed_new_session", engine=engine_display_name(new_engine))
+            )
+        except Exception:
+            logger.exception(
+                "Failed to deliver engine-changed notice on channel %s",
+                channel_key,
+            )
+
     try:
         if used_tmux:
             assert tmux_manager is not None
@@ -699,7 +729,12 @@ async def send_streaming_response(
             if new_sid:
                 await session_manager.override_session(channel_key, new_sid)
         else:
-            response = await session_manager.send_stream(channel_key, prompt, on_event)
+            response = await session_manager.send_stream(
+                channel_key,
+                prompt,
+                on_event,
+                on_engine_changed=_notify_engine_changed,
+            )
     except asyncio.CancelledError:
         # Status messages ARE the history — no cleanup needed
         raise
