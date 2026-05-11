@@ -87,6 +87,7 @@ _SEND_KEYS_MAP: dict[str, list[str]] = {
     "tab": ["Tab"],
     "btab": ["BTab"],
     "cC": ["C-c"],
+    "cU": ["C-u"],
     "cO": ["C-o"],
     "cR": ["C-r"],
     "cT": ["C-t"],

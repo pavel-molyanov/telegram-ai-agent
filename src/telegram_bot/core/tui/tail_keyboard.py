@@ -39,6 +39,7 @@ _VALID_ACTIONS = frozenset(
         "tab",
         "btab",
         "cC",
+        "cU",
         "cO",
         "cR",
         "cT",
@@ -94,7 +95,7 @@ def build_tail_keyboard(
       row 1 (arrows):     ⬆️  ⬇️  ⬅️  ➡️
       row 2 (input/esc):  ↩️  ⌫  Esc  Esc 2  Tab  ⇧Tab
       row 3 (digits):     1  2  3  0
-      row 4 (CC ctrl):    Ctrl+C  Ctrl+O  Ctrl+R  Ctrl+T  🔄  Close
+      row 4 (CC ctrl):    ⌃C  ⌃U  ⌃O  ⌃R  ⌃T  🔄  Close
 
     `kind` tags the message this keyboard belongs to (`panel` or `modal`)
     so the re-render path can pick the correct layout. Modal-alert callers
@@ -131,10 +132,11 @@ def build_tail_keyboard(
     ]
 
     control_row = [
-        InlineKeyboardButton(text="Ctrl+C", callback_data=cb("cC")),
-        InlineKeyboardButton(text="Ctrl+O", callback_data=cb("cO")),
-        InlineKeyboardButton(text="Ctrl+R", callback_data=cb("cR")),
-        InlineKeyboardButton(text="Ctrl+T", callback_data=cb("cT")),
+        InlineKeyboardButton(text="⌃C", callback_data=cb("cC")),
+        InlineKeyboardButton(text="⌃U", callback_data=cb("cU")),
+        InlineKeyboardButton(text="⌃O", callback_data=cb("cO")),
+        InlineKeyboardButton(text="⌃R", callback_data=cb("cR")),
+        InlineKeyboardButton(text="⌃T", callback_data=cb("cT")),
         InlineKeyboardButton(text="🔄", callback_data=cb("refresh")),
         InlineKeyboardButton(text="Close", callback_data=cb("close")),
     ]
