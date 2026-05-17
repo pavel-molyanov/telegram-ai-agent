@@ -304,7 +304,7 @@ async def ensure_exec_mode_ready(
         # a proper fix (pid→sessionId pointer via ~/.claude/sessions/<pid>.json)
         # is tracked separately.
         try:
-            await tmux_manager.start_session(
+            started = await tmux_manager.start_session(
                 key,
                 mode=mode,
                 cwd=cwd,
@@ -324,10 +324,11 @@ async def ensure_exec_mode_ready(
             key,
             msg_id,
         )
-        await source_msg.answer(
-            t("ui.tmux_started_engine", engine=engine_display_name(engine)),
-            disable_notification=True,
-        )
+        if started:
+            await source_msg.answer(
+                t("ui.tmux_started_engine", engine=engine_display_name(engine)),
+                disable_notification=True,
+            )
         return True
 
 

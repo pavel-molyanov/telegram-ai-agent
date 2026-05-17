@@ -185,7 +185,7 @@ async def _reset_channel(
         await session_manager.kill_session(key)
         session = session_manager._get_session(key)
         try:
-            await tmux_manager.start_session(
+            started = await tmux_manager.start_session(
                 key,
                 mode=session.mode,
                 cwd=session.cwd,
@@ -199,9 +199,10 @@ async def _reset_channel(
             logger.warning("fresh tmux start failed for %s", key, exc_info=True)
             await message.answer(t("ui.reset_failed"))
             return
-        await message.answer(
-            t("ui.tmux_started_engine", engine=engine_display_name(session.engine))
-        )
+        if started:
+            await message.answer(
+                t("ui.tmux_started_engine", engine=engine_display_name(session.engine))
+            )
         return
 
     forward_batcher.clear(key)
@@ -273,6 +274,41 @@ async def handle_kill(message: Message, tmux_manager: TmuxManager) -> None:
     )
     await tmux_manager.kill(key)
     await message.answer(t("ui.tmux_killed"))
+
+
+@router.message(Command("mcpstatus"))
+async def handle_mcpstatus(message: Message, tmux_manager: TmuxManager) -> None:
+    """Show redacted MCP process diagnostics for the current topic."""
+    key = channel_key(message)
+    status = html.escape(tmux_manager.mcp_status_text(key))
+    await message.answer(f"<pre>{status}</pre>", parse_mode="HTML")
+
+
+@router.message(Command("recycle"))
+async def handle_recycle(
+    message: Message,
+    tmux_manager: TmuxManager,
+    session_manager: SessionManager,
+    message_queue: MessageQueue,
+) -> None:
+    """Restart the current tmux runtime without intentionally clearing context."""
+    key = channel_key(message)
+    if not tmux_manager.is_active(key):
+        await message.answer(t("ui.tmux_not_active"))
+        return
+    if tmux_manager.is_processing(key) or message_queue.is_busy(key):
+        await message.answer(t("ui.exec_mode_busy"))
+        return
+    try:
+        ok = await tmux_manager.recycle(key, session_manager)
+    except RuntimeError:
+        logger.warning("recycle failed for %s", key, exc_info=True)
+        await message.answer(t("ui.recycle_failed"))
+        return
+    if ok:
+        await message.answer(t("ui.recycle_done"))
+    else:
+        await message.answer(t("ui.tmux_not_active"))
 
 
 @router.message(Command("resume"))

@@ -7,7 +7,8 @@ The bot runtime is split into:
 - `src/telegram_bot/core/handlers/` - Telegram command, text, media, voice, forward, topic, and TUI handlers.
 - `src/telegram_bot/core/services/` - session management, provider adapters, topic config, streaming, tmux, resume, MCP runtime, and transcription.
 - `src/telegram_bot/core/tui/` - tmux TUI capture, modal detection, keyboard controls, routing, and transcript helpers.
-- `mcp-servers/bot/` - MCP server that lets an agent send messages or files back to Telegram.
+- `mcp-servers/bot/` - MCP server that lets an agent send messages, images,
+  image galleries, and files back to Telegram.
 - `src/telegram_bot/prompts/` - generic public prompt modes.
 
 Two independent runtime axes are important:
@@ -27,3 +28,12 @@ online with a user-facing install message when neither CLI is available.
 
 Forum topics are isolated by `(chat_id, thread_id)`. Session mappings and tmux
 state are runtime files and must not be committed.
+
+Long-lived tmux runtimes generate topic-scoped MCP runtime configs. These
+configs tag child processes with non-secret runtime metadata so `/kill`,
+`/recycle`, subprocess cleanup, and diagnostics can identify bot-owned MCP
+processes without relying on private paths.
+
+Operational commands include `/recycle` for restarting a stuck tmux runtime
+while preserving resumable context when possible, and `/mcpstatus` for redacted
+MCP process diagnostics in the current topic.

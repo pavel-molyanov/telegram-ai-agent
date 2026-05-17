@@ -47,6 +47,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.tmux_failed": "❌ Failed to start tmux: {exc}",
         "ui.tmux_killed": "🗑 Tmux session killed",
         "ui.tmux_not_active": "No active tmux session in this topic",
+        "ui.recycle_done": "♻️ Runtime restarted",
+        "ui.recycle_failed": "❌ Couldn't restart the runtime. Try again in a moment.",
         "ui.engine_starting": (
             "🔄 {engine} is starting up — please wait a few seconds before sending."
         ),
@@ -241,6 +243,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tool.agent_done_with_desc": "✅ Subagent finished: {desc}",
         "tool.send_message": "💬 Sending message...",
         "tool.send_image": "🖼 Sending image...",
+        "tool.send_image_gallery": "🖼 Sending gallery...",
         "tool.send_document": "📎 Sending document...",
         "tool.fetch_url": "🌐 Fetching URL",
         "tool.run_tests": "🧪 Running tests",
@@ -276,6 +279,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.tmux_failed": "❌ Не удалось запустить tmux: {exc}",
         "ui.tmux_killed": "🗑 Tmux-сессия убита",
         "ui.tmux_not_active": "В этом топике нет активной tmux-сессии",
+        "ui.recycle_done": "♻️ Runtime перезапущен",
+        "ui.recycle_failed": (
+            "❌ Не удалось перезапустить runtime. Попробуй ещё раз через пару секунд."
+        ),
         "ui.engine_starting": (
             "🔄 {engine} запускается — подожди несколько секунд перед отправкой."
         ),
@@ -417,6 +424,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "tool.agent_done_with_desc": "✅ Субагент завершил работу: {desc}",
         "tool.send_message": "💬 Отправляю сообщение...",
         "tool.send_image": "🖼 Отправляю картинку...",
+        "tool.send_image_gallery": "🖼 Отправляю галерею...",
         "tool.send_document": "📎 Отправляю документ...",
         "tool.fetch_url": "🌐 Загружаю URL",
         "tool.run_tests": "🧪 Запускаю тесты",

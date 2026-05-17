@@ -33,6 +33,15 @@ Topic fields:
 - `engine`: `claude` or `codex`.
 - `model`: optional model override.
 
+Public prompt modes expose the generic bot MCP tools
+`send_message`, `send_image`, `send_image_gallery`, and `send_document`.
+They also expose Context7 documentation tools when the configured MCP profile
+contains Context7.
+
+Bot MCP send tools support optional Telegram `parse_mode` values `HTML` and
+`MarkdownV2`. Runtime code retries without formatting when Telegram rejects
+formatting and a retry is safe.
+
 Runtime prefers Claude Code when both engines are available. If a topic is
 configured for a missing engine and the other CLI is installed, the bot switches
 the topic to the available engine, persists that change, resets the active

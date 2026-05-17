@@ -57,11 +57,49 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _topic_base_mcp_config(
+    channel_key: ChannelKey,
+    *owners: object | None,
+) -> tuple[bool, str | None]:
+    """Return the currently configured topic MCP profile, if one exists.
+
+    Persisted ``state.base_mcp_config`` is only a cache of what was true when
+    the tmux session was created. On bot restart, topic_config.json is the
+    source of truth: otherwise old long-lived sessions keep resurrecting with
+    stale MCP profiles after a config deploy.
+    """
+    thread_id = channel_key[1]
+    if thread_id is None:
+        return False, None
+
+    for owner in owners:
+        if owner is None:
+            continue
+        topic_config = getattr(owner, "_topic_config", None)
+        if topic_config is None:
+            getter = getattr(owner, "get_topic_config", None)
+            topic_config = getter() if callable(getter) else None
+        get_topic = getattr(topic_config, "get_topic", None)
+        if not callable(get_topic):
+            continue
+        try:
+            topic = get_topic(thread_id)
+        except Exception:
+            logger.warning("Failed to read topic MCP config for %s", channel_key, exc_info=True)
+            continue
+        mcp_config = getattr(topic, "mcp_config", None)
+        if isinstance(mcp_config, str) and mcp_config:
+            return True, mcp_config
+        return True, None
+    return False, None
+
+
 def _ensure_runtime_mcp_config(
     *,
     state: TmuxSessionState,
     channel_key: ChannelKey,
     session_manager: object | None,
+    manager: object | None = None,
 ) -> None:
     if session_manager is None:
         return
@@ -69,8 +107,18 @@ def _ensure_runtime_mcp_config(
     project_root = getattr(settings, "project_root", None)
     default_getter = getattr(session_manager, "default_mcp_config_path", None)
     default_mcp = str(default_getter()) if callable(default_getter) else ""
+    has_topic_config, current_topic_mcp = _topic_base_mcp_config(
+        channel_key, session_manager, manager
+    )
+    base_mcp_config = (
+        current_topic_mcp or default_mcp
+        if has_topic_config
+        else state.base_mcp_config or state.mcp_config or default_mcp
+    )
+    if has_topic_config:
+        state.base_mcp_config = base_mcp_config or None
     state.mcp_config = ensure_bot_runtime_mcp_config(
-        base_mcp_config=state.base_mcp_config or state.mcp_config or default_mcp or None,
+        base_mcp_config=base_mcp_config or None,
         channel_key=channel_key,
         runtime_path=Path(state.session_dir) / "mcp.runtime.json",
         project_root=project_root,
@@ -153,6 +201,7 @@ def restore_all(
                     state=state,
                     channel_key=channel_key,
                     session_manager=session_manager,
+                    manager=manager,
                 )
                 manager._sessions[channel_key] = state
                 restored[channel_key] = state
@@ -180,6 +229,7 @@ def restore_all(
                     state=state,
                     channel_key=channel_key,
                     session_manager=session_manager,
+                    manager=manager,
                 )
                 # Resurrecting a dead session: transcript exists, so CC
                 # must be told to --resume (not --session-id, which would

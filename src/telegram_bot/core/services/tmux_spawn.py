@@ -20,6 +20,7 @@ import logging
 import subprocess
 from pathlib import Path
 
+from telegram_bot.core.services.process_cleanup import cleanup_tmux_runtime
 from telegram_bot.core.types import ChannelKey
 
 logger = logging.getLogger(__name__)
@@ -122,7 +123,7 @@ def spawn_tmux_sync(
     """
     try:
         session_dir.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["tmux", "kill-session", "-t", f"={name}"], capture_output=True)
+        cleanup_tmux_runtime(session_name=name, runtime_path=str(session_dir / "mcp.runtime.json"))
         result = subprocess.run(
             [
                 "tmux",

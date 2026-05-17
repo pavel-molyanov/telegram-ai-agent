@@ -42,6 +42,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import json
 import logging
 import re
 import subprocess
@@ -54,7 +55,8 @@ from typing import Literal
 from telegram_bot.core.messages import t
 from telegram_bot.core.services.bot_mcp_runtime import ensure_bot_runtime_mcp_config
 from telegram_bot.core.services.claude import Mode, StreamEvent
-from telegram_bot.core.services.providers import CODEX_ADAPTER
+from telegram_bot.core.services.process_cleanup import cleanup_tmux_runtime, runtime_diagnostics
+from telegram_bot.core.services.providers import CODEX_ADAPTER, CodexTranscriptSnapshot
 from telegram_bot.core.services.tail_runner import TailRunner
 from telegram_bot.core.services.tmux_modal_watchdog import (
     ModalWatchdog,
@@ -246,7 +248,6 @@ class TmuxManager:
         # poll-for-existence window inside the same 30s clock as readiness
         # (Decision 7). Cleared once the tail sees the file.
         self._spawn_deadlines: dict[ChannelKey, float] = {}
-        self._codex_start_snapshots: dict[ChannelKey, tuple[set[Path], float]] = {}
         # Channels whose most recent _spawn_tmux passed prompt-readiness but
         # failed the input probe (probe budget elapsed without the test char
         # appearing in the input bar). Set by `_spawn_tmux`, consumed by
@@ -478,8 +479,48 @@ class TmuxManager:
         resume_session_id: str | None = None,
         provider: str = "claude",
         model: str | None = None,
+    ) -> bool:
+        """Create (or resume) a tmux session with a persistent CC TUI process.
+
+        Returns True when this call actually spawned tmux. Returns False when
+        another concurrent lifecycle path already started a live session while
+        this call was waiting for the per-channel lock.
+        """
+        async with self._get_channel_lock(channel_key):
+            state = self._sessions.get(channel_key)
+            if state and self._tmux_alive(state.session_name):
+                logger.info(
+                    "start_session no-op for %s; live tmux session already exists",
+                    channel_key,
+                )
+                return False
+            await self._start_session_unlocked(
+                channel_key,
+                mode=mode,
+                cwd=cwd,
+                mcp_config=mcp_config,
+                chat_id=chat_id,
+                session_manager=session_manager,
+                resume_session_id=resume_session_id,
+                provider=provider,
+                model=model,
+            )
+            return True
+
+    async def _start_session_unlocked(
+        self,
+        channel_key: ChannelKey,
+        *,
+        mode: Mode,
+        cwd: str,
+        mcp_config: str,
+        chat_id: int,
+        session_manager: object,
+        resume_session_id: str | None = None,
+        provider: str = "claude",
+        model: str | None = None,
     ) -> None:
-        """Create (or resume) a tmux session with a persistent CC TUI process."""
+        """Create tmux state. Caller must hold the per-channel lifecycle lock."""
         name = self._make_name(channel_key)
         session_dir = self._sessions_dir / name
         base_mcp_config = mcp_config
@@ -508,8 +549,6 @@ class TmuxManager:
                 initial_offset = self._file_size(saved_path) if saved_path else 0
                 transcript_abs = str(saved_path) if saved_path else None
             else:
-                existing = set(Path.home().joinpath(".codex", "sessions").glob("**/*.jsonl"))
-                since_wall = time.time()
                 session_id = None
                 startup_cmd = CODEX_ADAPTER.build_tui_start(
                     cwd=cwd,
@@ -595,16 +634,6 @@ class TmuxManager:
                 loading_msg, t("ui.engine_ready", engine=provider)
             )
 
-        # The codex transcript discovery snapshot must be saved on BOTH
-        # the happy path AND the probe-blocked path. After the user
-        # dismisses the modal through /tui and sends their first real
-        # message, `_locate_codex_transcript_after_send` diffs the
-        # post-send jsonl listing against this snapshot to find the new
-        # session_id. Without it, that lookup would scan an empty
-        # baseline and pick up unrelated transcripts.
-        if provider == "codex" and resume_session_id is None:
-            self._codex_start_snapshots[channel_key] = (existing, since_wall)
-
         self._sessions[channel_key] = state
         self._save_state()
         # Now that the session is registered, drop the probe-blocked flag.
@@ -654,7 +683,10 @@ class TmuxManager:
         if channel_key is not None:
             self._probe_blocked.discard(channel_key)
         await asyncio.to_thread(
-            subprocess.run, ["tmux", "kill-session", "-t", f"={name}"], capture_output=True
+            cleanup_tmux_runtime,
+            session_name=name,
+            channel_key=channel_key,
+            runtime_path=str(session_dir / "mcp.runtime.json"),
         )
 
         spawn_start = time.monotonic()
@@ -2158,15 +2190,28 @@ class TmuxManager:
                     existing.set()
                     await self._wait_for_tail_exit(channel_key, timeout=0.5)
 
+                codex_snapshot = None
+                needs_codex_discovery = (
+                    state.provider == "codex"
+                    and state.session_id is None
+                    and state.transcript_path is None
+                )
+                if needs_codex_discovery:
+                    codex_snapshot = CODEX_ADAPTER.capture_tui_transcript_snapshot()
+
                 self._cancel_events[channel_key] = cancel_event
                 delivered = await self._safe_send_and_enter(channel_key, state, prompt)
                 if not delivered:
                     # _safe_send_and_enter posted an alert; do not start tail.
                     return ""
 
-                if state.provider == "codex" and not state.transcript_path:
+                if needs_codex_discovery and codex_snapshot is not None:
                     try:
-                        await self._locate_codex_transcript_after_send(channel_key, state)
+                        await self._locate_codex_transcript_after_send(
+                            state,
+                            snapshot=codex_snapshot,
+                            prompt=prompt,
+                        )
                     except RuntimeError:
                         logger.warning(
                             "Codex TUI transcript discovery failed after delivery; "
@@ -2263,6 +2308,12 @@ class TmuxManager:
         logger.warning("Timed out waiting for tail cleanup for %s", channel_key)
 
     async def clear_context(self, channel_key: ChannelKey, session_manager: object) -> bool:
+        async with self._get_channel_lock(channel_key):
+            return await self._clear_context_unlocked(channel_key, session_manager)
+
+    async def _clear_context_unlocked(
+        self, channel_key: ChannelKey, session_manager: object
+    ) -> bool:
         """Reset CC context by respawning tmux with a fresh `--session-id`.
 
         Historical note: earlier versions sent `Escape → /clear → Enter` into
@@ -2291,14 +2342,17 @@ class TmuxManager:
             await self._wait_for_tail_exit(channel_key)
 
         if state.provider == "codex":
-            state.mcp_config = self._ensure_runtime_mcp_config(
+            state.base_mcp_config = self._effective_base_mcp_config(
                 channel_key=channel_key,
                 base_mcp_config=state.base_mcp_config or state.mcp_config,
+                session_manager=session_manager,
+            )
+            state.mcp_config = self._ensure_runtime_mcp_config(
+                channel_key=channel_key,
+                base_mcp_config=state.base_mcp_config,
                 session_dir=Path(state.session_dir),
                 session_manager=session_manager,
             )
-            existing = set(Path.home().joinpath(".codex", "sessions").glob("**/*.jsonl"))
-            since_wall = time.time()
             new_session_id = None
             startup_cmd = CODEX_ADAPTER.build_tui_start(
                 cwd=state.cwd,
@@ -2308,9 +2362,14 @@ class TmuxManager:
             state.session_id = None
             state.transcript_path = None
         else:
-            state.mcp_config = self._ensure_runtime_mcp_config(
+            state.base_mcp_config = self._effective_base_mcp_config(
                 channel_key=channel_key,
                 base_mcp_config=state.base_mcp_config or state.mcp_config,
+                session_manager=session_manager,
+            )
+            state.mcp_config = self._ensure_runtime_mcp_config(
+                channel_key=channel_key,
+                base_mcp_config=state.base_mcp_config,
                 session_dir=Path(state.session_dir),
                 session_manager=session_manager,
             )
@@ -2343,10 +2402,9 @@ class TmuxManager:
                 state.session_id,
             )
             state.offset = 0
+            self._sessions.pop(channel_key, None)
             self._save_state()
             raise
-        if state.provider == "codex":
-            self._codex_start_snapshots[channel_key] = (existing, since_wall)
         logger.info(
             "Respawned tmux session %s with fresh CC session %s",
             state.session_name,
@@ -2355,6 +2413,15 @@ class TmuxManager:
         return True
 
     async def switch_session(
+        self,
+        channel_key: ChannelKey,
+        new_session_id: str,
+        session_manager: object,
+    ) -> bool:
+        async with self._get_channel_lock(channel_key):
+            return await self._switch_session_unlocked(channel_key, new_session_id, session_manager)
+
+    async def _switch_session_unlocked(
         self,
         channel_key: ChannelKey,
         new_session_id: str,
@@ -2404,9 +2471,14 @@ class TmuxManager:
         # Resume an existing transcript — guard above confirmed target
         # jsonl exists. `--session-id` would make CC bail with "Session
         # ID is already in use".
-        state.mcp_config = self._ensure_runtime_mcp_config(
+        state.base_mcp_config = self._effective_base_mcp_config(
             channel_key=channel_key,
             base_mcp_config=state.base_mcp_config or state.mcp_config,
+            session_manager=session_manager,
+        )
+        state.mcp_config = self._ensure_runtime_mcp_config(
+            channel_key=channel_key,
+            base_mcp_config=state.base_mcp_config,
             session_dir=Path(state.session_dir),
             session_manager=session_manager,
         )
@@ -2589,6 +2661,80 @@ class TmuxManager:
         async with self._get_channel_lock(channel_key):
             await self._kill_session_unlocked(channel_key)
 
+    async def recycle(self, channel_key: ChannelKey, session_manager: object) -> bool:
+        """Restart the current tmux runtime and clean its MCP processes.
+
+        Unlike `/new`, this does not intentionally reset conversation state.
+        It resumes when the provider has a known session id; Codex sessions
+        without discovered ids are restarted fresh because there is nothing
+        reliable to resume.
+        """
+        async with self._get_channel_lock(channel_key):
+            state = self._sessions.get(channel_key)
+            if not state:
+                return False
+            await self.close_buffer(channel_key)
+            event = self._cancel_events.get(channel_key)
+            if event:
+                event.set()
+                await self._wait_for_tail_exit(channel_key)
+
+            state.base_mcp_config = self._effective_base_mcp_config(
+                channel_key=channel_key,
+                base_mcp_config=state.base_mcp_config or state.mcp_config,
+                session_manager=session_manager,
+            )
+            state.mcp_config = self._ensure_runtime_mcp_config(
+                channel_key=channel_key,
+                base_mcp_config=state.base_mcp_config,
+                session_dir=Path(state.session_dir),
+                session_manager=session_manager,
+            )
+            resume_id = state.session_id
+            if state.provider == "codex":
+                if resume_id:
+                    startup_cmd = CODEX_ADAPTER.build_tui_resume(
+                        cwd=state.cwd,
+                        session_id=resume_id,
+                        model=state.model,
+                        mcp_config=state.mcp_config,
+                    )
+                else:
+                    startup_cmd = CODEX_ADAPTER.build_tui_start(
+                        cwd=state.cwd,
+                        model=state.model,
+                        mcp_config=state.mcp_config,
+                    )
+            elif resume_id:
+                startup_cmd = session_manager.build_tmux_startup_args(  # type: ignore[attr-defined]
+                    mode=state.mode,
+                    mcp_config=state.mcp_config,
+                    resume_session_id=resume_id,
+                )
+            else:
+                resume_id = generate_session_uuid()
+                state.session_id = resume_id
+                startup_cmd = session_manager.build_tmux_startup_args(  # type: ignore[attr-defined]
+                    mode=state.mode,
+                    mcp_config=state.mcp_config,
+                    session_id_new=resume_id,
+                )
+
+            await self._spawn_tmux(
+                name=state.session_name,
+                session_dir=Path(state.session_dir),
+                cwd=state.cwd,
+                startup_cmd=startup_cmd,
+                channel_key=channel_key,
+                provider=state.provider,
+            )
+            transcript = self._transcript_path_for_state(state)
+            state.offset = self._file_size(transcript) if transcript else 0
+            self._sessions[channel_key] = state
+            self._save_state()
+            logger.info("Recycled tmux session %s for channel %s", state.session_name, channel_key)
+            return True
+
     async def _kill_session_unlocked(self, channel_key: ChannelKey) -> None:
         # Cancel tail loop first so send_stream unblocks.
         await self.cancel(channel_key)
@@ -2603,16 +2749,59 @@ class TmuxManager:
         # are intentionally stable so waiters cannot split across old/new locks.
         self._last_modal_pane.pop(channel_key, None)
         self._spawn_deadlines.pop(channel_key, None)
-        self._codex_start_snapshots.pop(channel_key, None)
 
     async def _kill_tmux_only(self, channel_key: ChannelKey, state: TmuxSessionState) -> None:
         """Kill tmux process only; caller owns state lifecycle."""
-        _ = channel_key
         await asyncio.to_thread(
-            subprocess.run,
-            ["tmux", "kill-session", "-t", f"={state.session_name}"],
-            capture_output=True,
+            cleanup_tmux_runtime,
+            session_name=state.session_name,
+            channel_key=channel_key,
+            runtime_path=state.mcp_config,
         )
+
+    def mcp_status_text(self, channel_key: ChannelKey) -> str:
+        state = self._sessions.get(channel_key)
+        if not state:
+            return "No active tmux session in this topic."
+        configured = self._configured_mcp_servers(state.mcp_config)
+        diag = runtime_diagnostics(
+            session_name=state.session_name,
+            channel_key=channel_key,
+            runtime_path=state.mcp_config,
+            configured_servers=configured,
+        )
+        dupes = diag.duplicate_generations
+        duplicate_lines = (
+            ", ".join(f"{name}={count}" for name, count in sorted(dupes.items()))
+            if dupes
+            else "none"
+        )
+        return "\n".join(
+            [
+                f"topic: {channel_key[0]}:{channel_key[1]}",
+                f"session: {state.session_name}",
+                f"provider: {state.provider}",
+                f"configured: {', '.join(configured) if configured else 'none'}",
+                f"pane_pid: {diag.pane_pid or 'n/a'}",
+                f"pane_sid: {diag.pane_sid or 'n/a'}",
+                f"sid_processes: {len(diag.sid_processes)}",
+                f"tagged_processes: {len(diag.tagged_processes)}",
+                f"mcp_counts: {duplicate_lines}",
+                f"rss_mb: {diag.rss_kb / 1024:.1f}",
+            ]
+        )
+
+    def _configured_mcp_servers(self, mcp_config: str | None) -> tuple[str, ...]:
+        if not mcp_config:
+            return ()
+        try:
+            data = json.loads(Path(mcp_config).read_text(encoding="utf-8"))
+        except Exception:
+            return ()
+        servers = data.get("mcpServers") if isinstance(data, dict) else None
+        if not isinstance(servers, dict):
+            return ()
+        return tuple(sorted(str(name) for name in servers))
 
     def restore_all(
         self, session_manager: object | None = None
@@ -2720,6 +2909,65 @@ class TmuxManager:
         """Channel-key → tmux session name, using the configured prefix."""
         return make_session_name(channel_key, prefix=self._session_name_prefix)
 
+    def _topic_base_mcp_config(
+        self,
+        channel_key: ChannelKey,
+        session_manager: object | None = None,
+    ) -> tuple[bool, str | None]:
+        """Return whether topic config was read and its current MCP profile."""
+        thread_id = channel_key[1]
+        if thread_id is None:
+            return False, None
+
+        owners = (session_manager, self)
+        for owner in owners:
+            if owner is None:
+                continue
+            topic_config = getattr(owner, "_topic_config", None)
+            if topic_config is None:
+                getter = getattr(owner, "get_topic_config", None)
+                topic_config = getter() if callable(getter) else None
+            get_topic = getattr(topic_config, "get_topic", None)
+            if not callable(get_topic):
+                continue
+            try:
+                topic = get_topic(thread_id)
+            except Exception:
+                logger.warning("Failed to read topic MCP config for %s", channel_key, exc_info=True)
+                continue
+            mcp_config = getattr(topic, "mcp_config", None)
+            if isinstance(mcp_config, str) and mcp_config:
+                return True, mcp_config
+            return True, None
+        return False, None
+
+    def _default_mcp_config(
+        self,
+        session_manager: object | None = None,
+    ) -> tuple[str | None, str | Path | None]:
+        project_root = None
+        default_mcp: str | None = None
+        if session_manager is not None:
+            settings = getattr(session_manager, "_settings", None)
+            project_root = getattr(settings, "project_root", None)
+            default_getter = getattr(session_manager, "default_mcp_config_path", None)
+            if callable(default_getter):
+                default_mcp = str(default_getter())
+        return default_mcp, project_root
+
+    def _effective_base_mcp_config(
+        self,
+        *,
+        channel_key: ChannelKey,
+        base_mcp_config: str | None,
+        session_manager: object | None = None,
+    ) -> str | None:
+        has_topic_config, topic_mcp = self._topic_base_mcp_config(channel_key, session_manager)
+        default_mcp, _project_root = self._default_mcp_config(session_manager)
+        if has_topic_config:
+            return topic_mcp or default_mcp
+        return base_mcp_config or default_mcp
+
     def _ensure_runtime_mcp_config(
         self,
         *,
@@ -2728,16 +2976,14 @@ class TmuxManager:
         session_dir: Path,
         session_manager: object | None = None,
     ) -> str:
-        project_root = None
-        default_mcp = ""
-        if session_manager is not None:
-            settings = getattr(session_manager, "_settings", None)
-            project_root = getattr(settings, "project_root", None)
-            default_getter = getattr(session_manager, "default_mcp_config_path", None)
-            if callable(default_getter):
-                default_mcp = str(default_getter())
+        default_mcp, project_root = self._default_mcp_config(session_manager)
+        has_topic_config, topic_mcp = self._topic_base_mcp_config(channel_key, session_manager)
+        if has_topic_config:
+            effective_base = topic_mcp or default_mcp
+        else:
+            effective_base = base_mcp_config or default_mcp
         return ensure_bot_runtime_mcp_config(
-            base_mcp_config=base_mcp_config or default_mcp or None,
+            base_mcp_config=effective_base or None,
             channel_key=channel_key,
             runtime_path=session_dir / "mcp.runtime.json",
             project_root=project_root,
@@ -2804,28 +3050,37 @@ class TmuxManager:
         self._state_store.save(self._sessions)
 
     async def _locate_codex_transcript_after_send(
-        self, channel_key: ChannelKey, state: TmuxSessionState
+        self,
+        state: TmuxSessionState,
+        *,
+        snapshot: CodexTranscriptSnapshot,
+        prompt: str,
     ) -> None:
-        existing, since_wall = self._codex_start_snapshots.get(channel_key, (set(), time.time()))
         try:
             info = await CODEX_ADAPTER.locate_tui_transcript(
                 cwd=state.cwd,
-                existing=existing,
-                since_wall_time=since_wall,
+                snapshot=snapshot,
+                prompt=prompt,
                 timeout_sec=30.0,
             )
         except Exception:
             raise RuntimeError("Codex TUI transcript discovery failed") from None
         state.session_id = info.session_id
         state.transcript_path = str(info.transcript_path)
-        self._codex_start_snapshots.pop(channel_key, None)
+        state.offset = info.tail_start_offset
         self._save_state()
 
     def _transcript_path_for_state(self, state: TmuxSessionState) -> Path | None:
         if state.provider == "codex":
-            if not state.transcript_path:
+            if state.transcript_path:
+                return Path(state.transcript_path)
+            if not state.session_id:
                 return None
-            return Path(state.transcript_path)
+            return CODEX_ADAPTER.transcript_path_for_state(
+                cwd=state.cwd,
+                session_id=state.session_id,
+                transcript_path=state.transcript_path,
+            )
         if not state.session_id:
             return None
         return transcript_path(state.cwd, state.session_id)
