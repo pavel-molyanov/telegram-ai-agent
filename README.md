@@ -27,8 +27,10 @@ tokens, or machine-specific deployment config.
 - Open a live TUI snapshot with `/tui` and press buttons for Enter, Esc, arrows,
   digits, refresh, and close.
 - Resume saved sessions by replying to previous bot messages or with `/resume`.
-- Let the agent send messages, images, and documents back to Telegram through
-  the bundled bot MCP server.
+- Restart a stuck topic runtime with `/recycle` and inspect MCP runtime process
+  health with `/mcpstatus`.
+- Let the agent send messages, images, image galleries, and documents back to
+  Telegram through the bundled bot MCP server.
 
 ## How It Works
 
@@ -277,8 +279,9 @@ Use this when:
 - the agent may ask permission questions or show interactive menus;
 - you want `/resume` and reply-to-session behavior.
 
-`tmux` consumes resources while the session is alive. Use `/kill` when you no
-longer need it.
+`tmux` consumes resources while the session is alive. Use `/recycle` if a topic
+runtime is stuck but you want to keep resumable context; use `/kill` when you no
+longer need the session.
 
 ### subprocess
 
@@ -359,12 +362,16 @@ still exists as a legacy alias, but `/clear` is the command shown in the menu.
 - `/tui`: show and control the live tmux TUI.
 - `/tail`: legacy alias for `/tui`.
 - `/kill`: stop the active tmux session and free resources.
+- `/recycle`: restart the active tmux runtime and clean topic-owned MCP
+  processes without intentionally clearing resumable context.
+- `/mcpstatus`: show redacted MCP process diagnostics for the current topic.
 
 Recommended defaults:
 
 - Real development: `/mode` -> `tmux`, `/stream` -> `live`.
 - Short one-off tasks: `/mode` -> `subprocess`, `/stream` -> `minimal` or
   `live`.
+- Runtime looks stuck but the session should be preserved: `/recycle`.
 - Old session no longer needed: `/kill`.
 
 ## MCP Bot Server
@@ -377,7 +384,15 @@ Public prompt modes allow these generic bot tools:
 
 - `send_message`
 - `send_image`
+- `send_image_gallery`
 - `send_document`
+
+The message, image, gallery, and document tools accept optional Telegram
+`parse_mode` values `HTML` or `MarkdownV2`. If Telegram rejects formatting, the
+server retries without `parse_mode` where that is safe.
+
+Public prompt modes also allow Context7 documentation tools so agents can fetch
+current library/API documentation from configured MCP profiles.
 
 Keep real `.mcp.json` files out of git. They may contain tokens or local paths.
 

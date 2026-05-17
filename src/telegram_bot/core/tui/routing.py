@@ -22,6 +22,8 @@ BOT_RESERVED_COMMANDS = frozenset(
         "/engine",
         "/resume",
         "/kill",
+        "/recycle",
+        "/mcpstatus",
         "/cancel",
         "/stream",
         "/language",

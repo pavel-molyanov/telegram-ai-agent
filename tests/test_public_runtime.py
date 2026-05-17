@@ -62,6 +62,7 @@ def test_public_prompt_modes_have_bot_mcp_tools() -> None:
     required = {
         "mcp__bot__send_message",
         "mcp__bot__send_image",
+        "mcp__bot__send_image_gallery",
         "mcp__bot__send_document",
     }
 
@@ -75,6 +76,18 @@ def test_free_mode_allows_skill_for_topic_setup() -> None:
     tools = set(cc_modes._MODE_TOOLS["free"].split(","))
 
     assert "Skill" in tools
+
+
+def test_public_prompt_modes_allow_context7_docs_tools() -> None:
+    required = {
+        "mcp__context7__resolve-library-id",
+        "mcp__context7__query-docs",
+        "mcp__context7__get-library-docs",
+    }
+
+    for mode in ("free", "task"):
+        tools = set(cc_modes._MODE_TOOLS[mode].split(","))
+        assert required <= tools
 
 
 def test_engine_selection_falls_back_to_available_cli(monkeypatch) -> None:
@@ -135,6 +148,8 @@ def test_public_command_handlers_are_wired() -> None:
     assert commands.handle_stream_mode is not None
     assert commands.handle_mode_command is not None
     assert commands.handle_engine_command is not None
+    assert commands.handle_recycle is not None
+    assert commands.handle_mcpstatus is not None
     assert handle_tail_command is not None
 
 
@@ -142,6 +157,8 @@ def test_public_bot_command_menu_is_public_only() -> None:
     command_names = {command.command for command in build_bot_commands("ru")}
 
     assert "clear" in command_names
+    assert "recycle" in command_names
+    assert "mcpstatus" in command_names
     assert "tui" in command_names
     assert "tail" in command_names
     assert "new" not in command_names
@@ -165,5 +182,12 @@ def test_mcp_bot_server_imports() -> None:
 
     assert hasattr(module, "send_message")
     assert hasattr(module, "send_image")
+    assert hasattr(module, "send_image_gallery")
     assert hasattr(module, "send_document")
     assert not hasattr(module, "send_file")
+
+    assert module._normalize_parse_mode("html") == ("HTML", None)
+    assert module._normalize_parse_mode("MarkdownV2") == ("MarkdownV2", None)
+    invalid_mode, error = module._normalize_parse_mode("Markdown")
+    assert invalid_mode is None
+    assert error is not None

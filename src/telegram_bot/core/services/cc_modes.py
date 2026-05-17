@@ -54,13 +54,30 @@ DEFAULT_MODE: Mode = "free"
 # Core keeps only generic tools. Assistant-specific MCP tools are attached
 # by the private entry point via SessionManager.extend_mode_tools.
 
-_BOT_MCP_TOOLS = "mcp__bot__send_message,mcp__bot__send_image,mcp__bot__send_document"
+_BOT_MCP_TOOLS = (
+    "mcp__bot__send_message,"
+    "mcp__bot__send_image,"
+    "mcp__bot__send_image_gallery,"
+    "mcp__bot__send_document"
+)
 
-TASK_MODE_TOOLS = f"Skill,{_BOT_MCP_TOOLS},Read,Grep,Glob,Bash,Agent"
-KNOWLEDGE_MODE_TOOLS = f"Skill,{_BOT_MCP_TOOLS},Read,Write,Edit,Grep,Glob,Bash,Agent"
-FREE_MODE_TOOLS = f"Skill,{_BOT_MCP_TOOLS},Read,Write,Edit,Grep,Glob,Bash,Agent"
-PROJECT_MODE_TOOLS = f"{_BOT_MCP_TOOLS},Read,Write,Edit,Grep,Glob,Bash,Agent,Skill"
-BLOG_MODE_TOOLS = f"Skill,{_BOT_MCP_TOOLS},Read,Write,Edit,Grep,Glob,Bash,Agent"
+_CONTEXT7_MCP_TOOLS = (
+    "mcp__context7__resolve-library-id,mcp__context7__query-docs,mcp__context7__get-library-docs"
+)
+
+TASK_MODE_TOOLS = f"Skill,{_BOT_MCP_TOOLS},{_CONTEXT7_MCP_TOOLS},Read,Grep,Glob,Bash,Agent"
+KNOWLEDGE_MODE_TOOLS = (
+    f"Skill,{_BOT_MCP_TOOLS},{_CONTEXT7_MCP_TOOLS},Read,Write,Edit,Grep,Glob,Bash,Agent"
+)
+FREE_MODE_TOOLS = (
+    f"Skill,{_BOT_MCP_TOOLS},{_CONTEXT7_MCP_TOOLS},Read,Write,Edit,Grep,Glob,Bash,Agent"
+)
+PROJECT_MODE_TOOLS = (
+    f"{_BOT_MCP_TOOLS},{_CONTEXT7_MCP_TOOLS},Read,Write,Edit,Grep,Glob,Bash,Agent,Skill"
+)
+BLOG_MODE_TOOLS = (
+    f"Skill,{_BOT_MCP_TOOLS},{_CONTEXT7_MCP_TOOLS},Read,Write,Edit,Grep,Glob,Bash,Agent"
+)
 
 _MODE_TOOLS: dict[str, str] = {
     "task": TASK_MODE_TOOLS,

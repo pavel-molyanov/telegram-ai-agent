@@ -51,6 +51,7 @@ from telegram_bot.core.services.cc_modes import (
     _get_mode_prompt,
 )
 from telegram_bot.core.services.codex_mcp import build_codex_mcp_config_args
+from telegram_bot.core.services.process_cleanup import tagged_processes, terminate_processes
 from telegram_bot.core.services.providers import CODEX_ADAPTER, ExecCommand, choose_available_engine
 from telegram_bot.core.services.topic_runtime import BotDefaults, resolve_topic_runtime_config
 from telegram_bot.core.types import ChannelKey
@@ -643,6 +644,17 @@ class SessionManager:
                 with contextlib.suppress(OSError):
                     runtime_mcp_path.unlink()
 
+        async def cleanup_runtime_mcp_processes() -> None:
+            if runtime_mcp_path is None:
+                return
+            processes = await asyncio.to_thread(
+                tagged_processes,
+                channel_key=(session.chat_id, session.thread_id),
+                runtime_path=str(runtime_mcp_path),
+            )
+            if processes:
+                await asyncio.to_thread(terminate_processes, processes)
+
         logger.info(
             "Running agent stream: provider=%s resume=%s, mode=%s, cwd=%s, session_id=%s",
             session.engine,
@@ -694,6 +706,7 @@ class SessionManager:
                 process.stdin.close()
             except (BrokenPipeError, ConnectionError):
                 await self._kill_process(process)
+                await cleanup_runtime_mcp_processes()
                 async with session.process_lock:
                     if session.process is process:
                         session.process = None
@@ -725,6 +738,7 @@ class SessionManager:
         except TimeoutError:
             logger.warning("CC stream timed out after %ds", self._settings.cc_query_timeout_sec)
             await self._kill_process(process)
+            await cleanup_runtime_mcp_processes()
             async with session.process_lock:
                 if session.process is process:
                     session.process = None
@@ -736,6 +750,7 @@ class SessionManager:
             cleanup_runtime_mcp_config()
             raise CCTimeoutError from None
         except Exception:
+            await cleanup_runtime_mcp_processes()
             if stderr_task is not None:
                 stderr_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -753,6 +768,7 @@ class SessionManager:
                 self._settings.cc_wait_timeout_sec,
             )
             await self._kill_process(process)
+            await cleanup_runtime_mcp_processes()
             async with session.process_lock:
                 if session.process is process:
                     session.process = None
@@ -780,6 +796,7 @@ class SessionManager:
                 cleanup_runtime_mcp_config()
                 raise CCProcessError(process.returncode or -1)
         cleanup_output_last_message()
+        await cleanup_runtime_mcp_processes()
         cleanup_runtime_mcp_config()
 
         if process.returncode and process.returncode != 0 and not result_text:

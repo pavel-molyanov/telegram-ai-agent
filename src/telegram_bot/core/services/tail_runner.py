@@ -314,6 +314,12 @@ class TailRunner:
                     line = f.readline()
                     if not line:
                         break
+                    if not line.endswith("\n"):
+                        # JSONL writers append one record per newline. A read
+                        # can race with the writer and see a partial final
+                        # line; don't advance offset until the newline lands,
+                        # otherwise the completed JSON object is skipped.
+                        break
                     self._set_offset(f.tell())
                     stripped = line.strip()
                     if stripped:

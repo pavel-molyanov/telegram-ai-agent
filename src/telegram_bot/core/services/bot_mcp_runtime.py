@@ -72,6 +72,8 @@ def ensure_bot_runtime_mcp_config(
     channel_key: ChannelKey,
     runtime_path: Path,
     project_root: str | Path | None = None,
+    runtime_kind: str | None = None,
+    tmux_session: str | None = None,
 ) -> str:
     """Write a bot-session MCP config with current Telegram routing env.
 
@@ -86,10 +88,29 @@ def ensure_bot_runtime_mcp_config(
         servers = {}
         data["mcpServers"] = servers
 
+    inferred_session = tmux_session or runtime_path.parent.name
+    inferred_kind = runtime_kind or ("tmux" if inferred_session.startswith("cc-") else "subprocess")
+    common_env = {
+        "AI_ASSISTANT_CHANNEL_KEY": f"{channel_key[0]}:{channel_key[1]}",
+        "AI_ASSISTANT_RUNTIME_KIND": inferred_kind,
+        "AI_ASSISTANT_TMUX_SESSION": inferred_session if inferred_kind == "tmux" else "",
+        "AI_ASSISTANT_SESSION_DIR": str(runtime_path.parent),
+        "AI_ASSISTANT_MCP_RUNTIME": str(runtime_path),
+    }
+
+    for server in servers.values():
+        if not isinstance(server, dict):
+            continue
+        raw_env = server.get("env")
+        env = dict(raw_env) if isinstance(raw_env, dict) else {}
+        env.update(common_env)
+        server["env"] = env
+
     raw_bot = servers.get("bot")
     bot_server = dict(raw_bot) if isinstance(raw_bot, dict) else _standard_bot_server(root)
     raw_env = bot_server.get("env")
     env = dict(raw_env) if isinstance(raw_env, dict) else {}
+    env.update(common_env)
     env.setdefault("PROJECT_DIR", str(root))
     env["TELEGRAM_CHAT_ID"] = str(channel_key[0])
     env["TELEGRAM_THREAD_ID"] = "" if channel_key[1] is None else str(channel_key[1])

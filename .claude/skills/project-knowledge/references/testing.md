@@ -23,7 +23,10 @@ Minimal public tests should cover:
 - provider parser smoke behavior;
 - MCP bot server importability;
 - no private default working directory;
-- public command wiring for `/mode`, `/engine`, `/stream`, `/tui`, and `/resume`.
+- public command wiring for `/mode`, `/engine`, `/stream`, `/tui`, `/resume`,
+  `/recycle`, and `/mcpstatus`;
+- public MCP tool allowlists, including `send_image_gallery` and Context7
+  documentation tools.
 
 Manual Telegram QA is required before publication. Private deployed-bot QA is a
 regression signal; public-checkout/staging QA validates the public artifact.

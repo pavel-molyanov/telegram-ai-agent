@@ -29,6 +29,17 @@ logger = logging.getLogger(__name__)
 Engine = Literal["claude", "codex"]
 _CODEX_BOT_HOME = Path.home() / ".codex-bot"
 _CODEX_HOME = Path.home() / ".codex"
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_truthy(name: str) -> bool:
+    return os.getenv(name, "").lower() in _TRUTHY_ENV_VALUES
+
+
+def _use_codex_bot_home() -> bool:
+    return (
+        not _env_truthy("TELEGRAM_CODEX_SHARED_HOME") and (_CODEX_BOT_HOME / "config.toml").exists()
+    )
 
 
 def _ensure_codex_global_skill_links() -> None:
@@ -72,17 +83,26 @@ def engine_display_name(engine: str) -> str:
 
 
 def _codex_tui_prefix() -> list[str]:
-    """Use an isolated Codex home for TUI sessions when provisioned.
+    """Use the bot's lightweight Codex home when it is provisioned.
 
     Bot TUI sessions pass topic-scoped MCP servers through CLI overrides. A
-    large or broken user-level ~/.codex/config.toml should not block fresh
-    chat creation, so production can provide ~/.codex-bot with shared auth and
-    a minimal config.
+    large or broken user-level ~/.codex/config.toml should not block fresh chat
+    creation, so production provides ~/.codex-bot with shared auth and minimal
+    config. Operators can temporarily opt into the regular home with
+    ``TELEGRAM_CODEX_SHARED_HOME=1``.
     """
-    if (_CODEX_BOT_HOME / "config.toml").exists():
+    if _use_codex_bot_home():
         _ensure_codex_global_skill_links()
         return ["env", f"CODEX_HOME={_CODEX_BOT_HOME}"]
     return []
+
+
+def _codex_sessions_root(home: Path | None = None) -> Path:
+    if home is not None:
+        return home / ".codex" / "sessions"
+    if _use_codex_bot_home():
+        return _CODEX_BOT_HOME / "sessions"
+    return Path.home() / ".codex" / "sessions"
 
 
 @dataclass(frozen=True)
@@ -110,6 +130,19 @@ class TuiParseResult:
 class TuiSessionInfo:
     session_id: str
     transcript_path: Path
+    tail_start_offset: int = 0
+
+
+@dataclass(frozen=True)
+class TranscriptFileState:
+    size: int
+    mtime_ns: int
+
+
+@dataclass(frozen=True)
+class CodexTranscriptSnapshot:
+    root: Path
+    files: dict[Path, TranscriptFileState]
 
 
 class ProviderAdapter(Protocol):
@@ -162,12 +195,102 @@ class CodexAdapter:
         return False
 
     def _meta_session_id(self, payload: dict[str, Any], *, cwd: str) -> str | None:
-        if payload.get("originator") != "codex-tui" or payload.get("cwd") != cwd:
+        if payload.get("originator") != "codex-tui" or not self._cwd_matches(
+            payload.get("cwd"), cwd
+        ):
             return None
         if self._is_subagent_source(payload.get("source")):
             return None
         session_id = payload.get("id")
         return session_id if isinstance(session_id, str) and session_id else None
+
+    @staticmethod
+    def _cwd_matches(value: object, cwd: str) -> bool:
+        if not isinstance(value, str):
+            return False
+        if value == cwd:
+            return True
+        try:
+            return Path(value).resolve() == Path(cwd).resolve()
+        except OSError:
+            return False
+
+    def capture_tui_transcript_snapshot(
+        self, *, home: Path | None = None
+    ) -> CodexTranscriptSnapshot:
+        root = _codex_sessions_root(home)
+        files: dict[Path, TranscriptFileState] = {}
+        for path in root.glob("**/*.jsonl"):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            files[path.resolve()] = TranscriptFileState(
+                size=stat.st_size,
+                mtime_ns=stat.st_mtime_ns,
+            )
+        return CodexTranscriptSnapshot(root=root, files=files)
+
+    @staticmethod
+    def _iter_complete_json_lines_from(path: Path, offset: int) -> list[dict[str, Any]]:
+        try:
+            with path.open("rb") as f:
+                f.seek(offset)
+                raw = f.read()
+        except OSError:
+            return []
+        if not raw:
+            return []
+        if not raw.endswith(b"\n"):
+            parts = raw.rsplit(b"\n", 1)
+            raw = b"" if len(parts) == 1 else parts[0] + b"\n"
+        records: list[dict[str, Any]] = []
+        for line in raw.splitlines():
+            if not line.strip():
+                continue
+            data = _load_json(line.decode("utf-8", errors="replace"))
+            if data is not None:
+                records.append(data)
+        return records
+
+    def _session_id_from_meta(self, path: Path, *, cwd: str, max_records: int = 5) -> str | None:
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as f:
+                for idx, line in enumerate(f):
+                    if idx >= max_records:
+                        break
+                    data = _load_json(line)
+                    if not data or data.get("type") != "session_meta":
+                        continue
+                    payload = data.get("payload")
+                    if isinstance(payload, dict):
+                        return self._meta_session_id(payload, cwd=cwd)
+        except OSError:
+            return None
+        return None
+
+    @staticmethod
+    def _normalize_prompt_for_match(value: object) -> str | None:
+        if not isinstance(value, str):
+            return None
+        return value.rstrip("\r\n")
+
+    @classmethod
+    def _prompts_match(cls, value: object, prompt: str) -> bool:
+        return cls._normalize_prompt_for_match(value) == cls._normalize_prompt_for_match(prompt)
+
+    @classmethod
+    def _has_prompt_user_message(cls, records: list[dict[str, Any]], prompt: str) -> int:
+        matches = 0
+        for data in records:
+            if data.get("type") != "event_msg":
+                continue
+            payload = data.get("payload")
+            if not isinstance(payload, dict) or payload.get("type") != "user_message":
+                continue
+            if cls._prompts_match(payload.get("message"), prompt):
+                matches += 1
+        return matches
 
     @staticmethod
     def _command_from_exec_payload(payload: dict[str, Any]) -> str | None:
@@ -477,8 +600,7 @@ class CodexAdapter:
         Collisions fail closed: returning None is safer than tailing an
         arbitrary transcript from a different run.
         """
-        home = home or Path.home()
-        root = home / ".codex" / "sessions"
+        root = _codex_sessions_root(home)
         matches: list[Path] = []
         for path in root.glob(f"**/*{session_id}*.jsonl"):
             try:
@@ -501,61 +623,82 @@ class CodexAdapter:
         self,
         *,
         cwd: str,
-        existing: set[Path],
-        since_wall_time: float,
+        snapshot: CodexTranscriptSnapshot,
+        prompt: str,
         home: Path | None = None,
         timeout_sec: float = 30.0,
     ) -> TuiSessionInfo:
-        home = home or Path.home()
-        root = home / ".codex" / "sessions"
+        root = _codex_sessions_root(home) if home is not None else snapshot.root
         deadline = time.monotonic() + timeout_sec
-        last_candidates: list[tuple[str, str, object, Path]] = []
-        while time.monotonic() < deadline:
+        settle_sec = min(0.25, timeout_sec)
+        single_since: float | None = None
+        single_identity: tuple[str, Path, int] | None = None
+        last_matches: list[tuple[str, Path, int]] = []
+        while True:
             candidates: list[TuiSessionInfo] = []
-            candidate_meta: list[tuple[str, str, object, Path]] = []
+            candidate_meta: list[tuple[str, Path, int]] = []
             for path in root.glob("**/*.jsonl"):
-                if path in existing:
-                    continue
+                resolved = path.resolve()
                 try:
-                    if path.stat().st_mtime < since_wall_time:
-                        continue
-                    first = path.read_text(errors="replace").splitlines()[0]
-                    data = _load_json(first)
-                except (OSError, IndexError):
+                    stat = path.stat()
+                except OSError:
                     continue
-                if not data or data.get("type") != "session_meta":
+                previous = snapshot.files.get(resolved)
+                if previous is not None and stat.st_size <= previous.size:
                     continue
-                payload = data.get("payload")
-                if not isinstance(payload, dict):
+                baseline = (
+                    previous.size if previous is not None and stat.st_size >= previous.size else 0
+                )
+                session_id = self._session_id_from_meta(path, cwd=cwd)
+                if not session_id:
                     continue
-                session_id = self._meta_session_id(payload, cwd=cwd)
-                if isinstance(session_id, str):
-                    candidates.append(TuiSessionInfo(session_id, path.resolve()))
+                records = self._iter_complete_json_lines_from(path, baseline)
+                prompt_matches = self._has_prompt_user_message(records, prompt)
+                if prompt_matches == 0:
+                    continue
+                for _ in range(prompt_matches):
+                    candidates.append(TuiSessionInfo(session_id, resolved, baseline))
                     candidate_meta.append(
                         (
                             session_id,
-                            str(payload.get("cwd")),
-                            payload.get("source"),
-                            path.resolve(),
+                            resolved,
+                            baseline,
                         )
                     )
-            last_candidates = candidate_meta
-            if len(candidates) == 1:
-                return candidates[0]
+            last_matches = candidate_meta
             if len(candidates) > 1:
                 logger.warning(
-                    "Codex TUI transcript collision for cwd=%s candidates=%s",
+                    "Codex TUI transcript prompt collision for cwd=%s candidates=%s",
                     cwd,
                     candidate_meta,
                 )
                 raise RuntimeError("Codex TUI transcript collision")
-            await asyncio.sleep(0.2)
+            if len(candidates) == 1:
+                identity = (
+                    candidates[0].session_id,
+                    candidates[0].transcript_path,
+                    candidates[0].tail_start_offset,
+                )
+                now = time.monotonic()
+                if single_identity != identity:
+                    single_identity = identity
+                    single_since = now
+                if single_since is not None and (
+                    now - single_since >= settle_sec or now >= deadline
+                ):
+                    return candidates[0]
+            else:
+                single_identity = None
+                single_since = None
+            if time.monotonic() >= deadline:
+                break
+            await asyncio.sleep(min(0.2, max(deadline - time.monotonic(), 0.0)))
         logger.warning(
-            "Codex TUI transcript not found for cwd=%s since=%s existing=%d candidates=%s",
+            "Codex TUI transcript not found for cwd=%s root=%s snapshot_files=%d matches=%s",
             cwd,
-            since_wall_time,
-            len(existing),
-            last_candidates,
+            root,
+            len(snapshot.files),
+            last_matches,
         )
         raise TimeoutError("Codex TUI transcript not found")
 
