@@ -105,7 +105,7 @@ async def _start() -> None:
     tmux_manager.restore_all()
     session_manager = SessionManager(settings, topic_config=topic_config)
     transcriber = Transcriber(settings)
-    forward_batcher = ForwardBatcher(bot=bot)
+    forward_batcher = ForwardBatcher(bot=bot, transcriber=transcriber)
 
     async def _process_queue_item(
         channel_key: ChannelKey,
