@@ -756,6 +756,12 @@ class NessyAdapter:
             lines.pop()
         tail = "\n".join(lines[-20:]).lower()
         markers = (
+            # Approval dialog
+            "apply this change",
+            "yes, allow once",
+            "yes, allow always",
+            "no, suggest changes",
+            # Generic prompts
             "press enter",
             "confirm",
             "select",
