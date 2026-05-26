@@ -2900,49 +2900,47 @@ class TmuxManager:
     ) -> None:
         """Locate Nessy TUI transcript after sending a message.
         
-        Nessy writes transcripts to ~/.nessy/sessions/ as JSONL.
-        We scan for new files since session start and match by cwd.
+        Nessy writes transcripts to ~/.nessy/projects/<slug>/chats/<session-id>.jsonl
+        where <slug> is derived from the cwd.
         """
         import json
         
         try:
-            # For Nessy, we use the adapter's transcript discovery
-            # Nessy session IDs are UUIDs, and transcripts are in ~/.nessy/sessions/
-            nessy_sessions_dir = Path.home() / ".nessy" / "sessions"
-            if not nessy_sessions_dir.exists():
-                raise RuntimeError("Nessy sessions directory not found")
+            # Nessy stores sessions per-project: ~/.nessy/projects/<slug>/chats/<id>.jsonl
+            nessy_root = Path.home() / ".nessy" / "projects"
+            if not nessy_root.exists():
+                raise RuntimeError("Nessy projects directory not found")
             
-            # Find the most recent transcript for this cwd
+            # Find transcript by session_id in any project directory
             found_path: Path | None = None
-            for path in nessy_sessions_dir.glob("**/*.jsonl"):
-                # Check if this transcript matches our session
-                try:
-                    first_line = path.read_text(errors="replace").splitlines()[0]
-                    data = json.loads(first_line)
-                    if data.get("type") == "session_meta":
-                        session_cwd = data.get("cwd", "")
-                        session_id = data.get("session_id", "")
-                        if session_cwd == state.cwd and session_id == state.session_id:
-                            found_path = path
-                            break
-                except (OSError, json.JSONDecodeError, IndexError):
+            for project_dir in nessy_root.iterdir():
+                if not project_dir.is_dir():
                     continue
-
-            if found_path is None:
-                # Fallback: use the most recent transcript for this cwd
-                for path in sorted(nessy_sessions_dir.glob("**/*.jsonl"),
-                                   key=lambda p: p.stat().st_mtime, reverse=True):
+                chats_dir = project_dir / "chats"
+                if not chats_dir.exists():
+                    continue
+                
+                # Try exact session_id match
+                candidate = chats_dir / f"{state.session_id}.jsonl"
+                if candidate.exists():
+                    found_path = candidate
+                    break
+                
+                # Fallback: scan for matching session in metadata
+                for path in chats_dir.glob("*.jsonl"):
                     try:
                         first_line = path.read_text(errors="replace").splitlines()[0]
                         data = json.loads(first_line)
-                        if data.get("type") == "session_meta" and data.get("cwd") == state.cwd:
+                        if data.get("session_id") == state.session_id:
                             found_path = path
                             break
                     except (OSError, json.JSONDecodeError, IndexError):
                         continue
+                if found_path:
+                    break
             
             if found_path is None:
-                raise RuntimeError("No Nessy transcript found")
+                raise RuntimeError(f"No Nessy transcript found for session {state.session_id}")
             
             state.transcript_path = str(found_path.resolve())
             self._save_state()
