@@ -647,18 +647,38 @@ class NessyAdapter:
             message = data.get("message", {})
             parts = message.get("parts", [])
             texts = []
+            tool_calls = []
+            
             for part in parts:
-                if isinstance(part, dict):
-                    # Skip thought blocks (internal reasoning)
-                    if part.get("thought"):
-                        continue
-                    text = part.get("text", "")
-                    if isinstance(text, str) and text:
-                        texts.append(text)
-
+                if not isinstance(part, dict):
+                    continue
+                    
+                # Skip thought blocks (internal reasoning)
+                if part.get("thought"):
+                    continue
+                    
+                # Extract text content
+                text = part.get("text", "")
+                if isinstance(text, str) and text:
+                    texts.append(text)
+                
+                # Extract function calls (tool use requests)
+                if "functionCall" in part:
+                    func_call = part["functionCall"]
+                    tool_name = func_call.get("name", "")
+                    if tool_name:
+                        tool_calls.append(tool_name)
+            
+            events = []
+            # First send tool call status
+            for tool_name in tool_calls:
+                events.append(StreamEvent("status", f"⏳ {tool_name}..."))
+            
+            # Then send text content
             if texts:
-                return TuiParseResult([StreamEvent("text", "\n".join(texts))])
-            return TuiParseResult([])
+                events.append(StreamEvent("text", "\n".join(texts)))
+            
+            return TuiParseResult(events) if events else TuiParseResult([])
 
         # Handle tool calls
         if event_type == "tool_call":
