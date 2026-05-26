@@ -420,21 +420,36 @@ class SessionManager:
 
         Claude keeps the historical argv-prompt contract. Codex receives the
         prompt via stdin and writes the final answer to a unique temp file.
+        Nessy uses stream-json output with prompt via stdin.
         """
         cwd = session.cwd or str(self._default_cwd())
-        if session.engine != "codex":
-            return ExecCommand(
-                argv=self._build_command(
-                    prompt,
-                    session.session_id,
-                    session.mode,
-                    session.mcp_config,
-                    session.chat_id,
-                    session.thread_id,
-                ),
-                cwd=cwd,
-            )
+        
+        if session.engine == "codex":
+            return self._build_codex_exec_command(prompt, session, cwd)
+        
+        if session.engine == "nessy":
+            return self._build_nessy_exec_command(prompt, session, cwd)
+        
+        # Default: Claude
+        return ExecCommand(
+            argv=self._build_command(
+                prompt,
+                session.session_id,
+                session.mode,
+                session.mcp_config,
+                session.chat_id,
+                session.thread_id,
+            ),
+            cwd=cwd,
+        )
 
+    def _build_codex_exec_command(
+        self,
+        prompt: str,
+        session: SessionData,
+        cwd: str,
+    ) -> ExecCommand:
+        """Build Codex exec command."""
         output_dir = Path(self.file_cache_dir) / "codex-last-message"
         output_dir.mkdir(parents=True, exist_ok=True)
         with contextlib.suppress(OSError):
@@ -484,6 +499,43 @@ class SessionManager:
                 session.chat_id,
                 session.thread_id,
             ),
+            output_last_message_path=output_path,
+        )
+
+    def _build_nessy_exec_command(
+        self,
+        prompt: str,
+        session: SessionData,
+        cwd: str,
+    ) -> ExecCommand:
+        """Build Nessy exec command."""
+        from telegram_bot.core.services.providers import NESSY_ADAPTER
+        
+        output_dir = Path(self.file_cache_dir) / "nessy-last-message"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            output_dir.chmod(0o700)
+        output_path = output_dir / f"{session.chat_id}-{session.thread_id}-{time.time_ns()}.txt"
+        with contextlib.suppress(FileNotFoundError):
+            output_path.unlink()
+
+        argv = [
+            NESSY_ADAPTER.binary(),
+            "--output-format",
+            "stream-json",
+            "--channel",
+            "CI",
+        ]
+        if session.model:
+            argv.extend(["--model", session.model])
+        
+        # Nessy uses positional prompt
+        argv.append("--")
+        argv.append(prompt)
+        
+        return ExecCommand(
+            argv=argv,
+            cwd=cwd,
             output_last_message_path=output_path,
         )
 
@@ -864,6 +916,12 @@ class SessionManager:
                 events = parsed.events
                 new_sid = parsed.session_id
                 event_type = "codex"
+            elif provider == "nessy":
+                from telegram_bot.core.services.providers import NESSY_ADAPTER
+                parsed = NESSY_ADAPTER.parse_exec_event(line)
+                events = parsed.events
+                new_sid = parsed.session_id
+                event_type = "nessy"
             else:
                 try:
                     data = json.loads(line)
@@ -882,7 +940,7 @@ class SessionManager:
                 else:
                     await dispatch(event)
 
-            if provider == "codex":
+            if provider in ("codex", "nessy"):
                 idle_start = None
                 continue
 

@@ -38,8 +38,8 @@ ExecMode = Literal["subprocess", "tmux"]
 _VALID_EXEC_MODES: set[str] = {"subprocess", "tmux"}
 _DEFAULT_EXEC_MODE: ExecMode = "subprocess"
 
-Engine = Literal["claude", "codex"]
-_VALID_ENGINES: set[str] = {"claude", "codex"}
+Engine = Literal["claude", "codex", "nessy"]
+_VALID_ENGINES: set[str] = {"claude", "codex", "nessy"}
 _DEFAULT_ENGINE: Engine = "claude"
 _MODEL_OVERRIDE_RE = re.compile(r"^[A-Za-z0-9._:-]{1,80}$")
 _CORE_PROMPT_MODES: set[str] = {"task", "knowledge", "free", "project", "blog"}

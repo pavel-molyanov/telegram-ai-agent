@@ -54,7 +54,7 @@ from typing import Literal
 from telegram_bot.core.messages import t
 from telegram_bot.core.services.bot_mcp_runtime import ensure_bot_runtime_mcp_config
 from telegram_bot.core.services.claude import Mode, StreamEvent
-from telegram_bot.core.services.providers import CODEX_ADAPTER
+from telegram_bot.core.services.providers import CODEX_ADAPTER, NESSY_ADAPTER
 from telegram_bot.core.services.tail_runner import TailRunner
 from telegram_bot.core.services.tmux_modal_watchdog import (
     ModalWatchdog,
@@ -490,6 +490,7 @@ class TmuxManager:
             session_manager=session_manager,
         )
         transcript_abs: str | None = None
+        
         if provider == "codex":
             if resume_session_id is not None:
                 session_id = resume_session_id
@@ -512,6 +513,33 @@ class TmuxManager:
                 since_wall = time.time()
                 session_id = None
                 startup_cmd = CODEX_ADAPTER.build_tui_start(
+                    cwd=cwd,
+                    model=model,
+                    mcp_config=mcp_config,
+                )
+                initial_offset = 0
+        elif provider == "nessy":
+            if resume_session_id is not None:
+                session_id = resume_session_id
+                startup_cmd = NESSY_ADAPTER.build_tui_resume(
+                    cwd=cwd,
+                    session_id=resume_session_id,
+                    model=model,
+                    mcp_config=mcp_config,
+                )
+                current_state = self._sessions.get(channel_key)
+                saved_path = NESSY_ADAPTER.transcript_path_for_state(
+                    cwd=cwd,
+                    session_id=resume_session_id,
+                    transcript_path=current_state.transcript_path if current_state else None,
+                )
+                initial_offset = self._file_size(saved_path) if saved_path else 0
+                transcript_abs = str(saved_path) if saved_path else None
+            else:
+                existing = set(Path.home().joinpath(".nessy", "sessions").glob("**/*.jsonl"))
+                since_wall = time.time()
+                session_id = None
+                startup_cmd = NESSY_ADAPTER.build_tui_start(
                     cwd=cwd,
                     model=model,
                     mcp_config=mcp_config,
@@ -546,7 +574,11 @@ class TmuxManager:
             mcp_config=mcp_config,
             chat_id=chat_id,
             offset=initial_offset,
-            runner_version="codex-tui-v1" if provider == "codex" else "claude-tui-v1",
+            runner_version=(
+                "codex-tui-v1" if provider == "codex"
+                else "nessy-tui-v1" if provider == "nessy"
+                else "claude-tui-v1"
+            ),
             provider=provider,
             model=model,
             transcript_path=transcript_abs,

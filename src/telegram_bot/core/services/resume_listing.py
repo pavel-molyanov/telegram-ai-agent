@@ -1,4 +1,4 @@
-"""List resumable Claude Code and Codex TUI sessions for a cwd."""
+"""List resumable Claude Code, Codex, and Nessy TUI sessions for a cwd."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Literal
 
 from telegram_bot.core.tui.paths import _CODEX_SESSION_ID_RE, _SESSION_ID_RE, cwd_to_slug
 
-EngineName = Literal["claude", "codex"]
+EngineName = Literal["claude", "codex", "nessy"]
 _SOFT_CAP_BYTES = 64 * 1024
 _PREVIEW_LIMIT = 60
 
@@ -27,12 +27,13 @@ class SessionEntry:
 
 
 def list_sessions(cwd: str | Path, *, home: Path | None = None) -> list[SessionEntry]:
-    """Return Claude + Codex TUI sessions scoped to cwd, newest first."""
+    """Return Claude + Codex + Nessy TUI sessions scoped to cwd, newest first."""
     home = home or Path.home()
     cwd_path = Path(cwd)
     entries = [
         *_list_claude_sessions(cwd_path, home),
         *_list_codex_sessions(cwd_path, home),
+        *_list_nessy_sessions(cwd_path, home),
     ]
     return sorted(entries, key=lambda entry: entry.mtime, reverse=True)
 
@@ -90,6 +91,65 @@ def _list_codex_sessions(cwd: Path, home: Path) -> list[SessionEntry]:
     return entries
 
 
+def _list_nessy_sessions(cwd: Path, home: Path) -> list[SessionEntry]:
+    """List Nessy TUI sessions for a given cwd."""
+    root = home / ".nessy" / "sessions"
+    if not root.exists():
+        return []
+    entries: list[SessionEntry] = []
+    for path in root.glob("**/*.jsonl"):
+        meta = _nessy_meta(path)
+        if meta is None:
+            continue
+        session_id, session_cwd = meta
+        if not _same_cwd(session_cwd, cwd):
+            continue
+        stat = _safe_stat(path)
+        if stat is None:
+            continue
+        entries.append(
+            SessionEntry(
+                provider="nessy",
+                session_id=session_id,
+                transcript_path=path,
+                preview=_preview_nessy(path) or session_id[:8],
+                mtime=stat.st_mtime,
+                size_bytes=stat.st_size,
+            )
+        )
+    return entries
+
+
+def _nessy_meta(path: Path, *, max_records: int = 3) -> tuple[str, str] | None:
+    """Extract session_id and cwd from Nessy transcript metadata."""
+    for idx, data in enumerate(_iter_jsonl_soft(path)):
+        if idx >= max_records:
+            return None
+        if not isinstance(data, dict) or data.get("type") != "session_meta":
+            continue
+        session_id = data.get("session_id")
+        cwd = data.get("cwd")
+        if isinstance(session_id, str) and isinstance(cwd, str):
+            return session_id, cwd
+    return None
+
+
+def _preview_nessy(path: Path) -> str:
+    """Get preview text from Nessy transcript."""
+    for data in _iter_jsonl_soft(path):
+        if not isinstance(data, dict):
+            continue
+        if data.get("type") == "user_message":
+            text = _extract_text(data.get("content") or data.get("message"))
+            if _meaningful_preview(text):
+                return _truncate(text)
+        if data.get("type") == "assistant_message":
+            text = _extract_text(data.get("content") or data.get("message"))
+            if _meaningful_preview(text):
+                return _truncate(text)
+    return ""
+
+
 def _safe_stat(path: Path) -> os.stat_result | None:
     try:
         return path.stat()
@@ -138,6 +198,8 @@ def get_last_assistant_message(provider: EngineName, transcript_path: Path) -> s
         return _last_claude_assistant_message(transcript_path)
     if provider == "codex":
         return _last_codex_assistant_message(transcript_path)
+    if provider == "nessy":
+        return _last_nessy_assistant_message(transcript_path)
     return None
 
 
@@ -168,6 +230,18 @@ def _last_codex_assistant_message(path: Path) -> str | None:
         if fallback is None:
             fallback = text
     return fallback
+
+
+def _last_nessy_assistant_message(path: Path) -> str | None:
+    """Get last assistant message from Nessy transcript."""
+    for data in _iter_jsonl_tail(path):
+        if not isinstance(data, dict):
+            continue
+        if data.get("type") == "assistant_message":
+            text = _extract_text(data.get("content") or data.get("message"))
+            if text and text.strip():
+                return text.strip()
+    return None
 
 
 def _preview_claude(path: Path) -> str:

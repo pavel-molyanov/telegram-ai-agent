@@ -94,7 +94,7 @@ def exec_mode_keyboard(current: str | None = None) -> InlineKeyboardMarkup:
 
 
 def engine_keyboard(current_engine: str | None = None) -> InlineKeyboardMarkup:
-    """Two-button picker for provider engine."""
+    """Three-button picker for provider engine (Claude Code, Codex, Nessy)."""
 
     def _engine_label(engine: str, text: str) -> str:
         return f"✅ {text}" if current_engine == engine else text
@@ -109,6 +109,12 @@ def engine_keyboard(current_engine: str | None = None) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=_engine_label("codex", "Codex"),
                     callback_data="engine:codex",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_engine_label("nessy", "Nessy"),
+                    callback_data="engine:nessy",
                 ),
             ],
         ],

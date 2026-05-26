@@ -1,8 +1,8 @@
-"""Provider adapters for Claude Code and OpenAI Codex CLI.
+"""Provider adapters for Claude Code, OpenAI Codex CLI, and Nessy CLI.
 
 The bot has two independent axes:
 
-* provider/engine: which agent CLI to run (Claude or Codex)
+* provider/engine: which agent CLI to run (Claude, Codex, or Nessy)
 * exec_mode: how to run it (subprocess or tmux)
 
 Keeping the provider-specific command and parser contracts here prevents
@@ -26,7 +26,7 @@ from telegram_bot.core.services.codex_mcp import build_codex_mcp_config_args
 
 logger = logging.getLogger(__name__)
 
-Engine = Literal["claude", "codex"]
+Engine = Literal["claude", "codex", "nessy"]
 _CODEX_BOT_HOME = Path.home() / ".codex-bot"
 _CODEX_HOME = Path.home() / ".codex"
 
@@ -68,6 +68,8 @@ def engine_display_name(engine: str) -> str:
         return "Codex"
     if engine == "claude":
         return "Claude Code"
+    if engine == "nessy":
+        return "Nessy"
     return engine
 
 
@@ -563,20 +565,177 @@ class CodexAdapter:
 CODEX_ADAPTER = CodexAdapter()
 
 
+class NessyAdapter:
+    """Provider adapter for Nessy CLI.
+
+    Nessy CLI uses JSON stream output similar to Claude Code.
+    Key differences:
+    - Uses --output-format stream-json for structured events
+    - Supports tmux and subprocess execution modes
+    - Session management via --session-id and --resume
+    """
+
+    name: Engine = "nessy"
+
+    def binary(self) -> str:
+        """Return Nessy CLI path."""
+        if found := shutil.which("nessy"):
+            return str(found)
+        return "nessy"
+
+    def build_tui_start(
+        self, *, cwd: str, model: str | None = None, mcp_config: str | None = None
+    ) -> list[str]:
+        """Build Nessy TUI startup command."""
+        cmd = [
+            self.binary(),
+            "--output-format",
+            "stream-json",
+            "--channel",
+            "CI",
+        ]
+        if model:
+            cmd.extend(["--model", model])
+        # Nessy doesn't have --cd flag, so we rely on tmux working directory
+        return cmd
+
+    def build_tui_resume(
+        self,
+        *,
+        cwd: str,
+        session_id: str,
+        model: str | None = None,
+        mcp_config: str | None = None,
+    ) -> list[str]:
+        """Build Nessy TUI resume command."""
+        cmd = [
+            self.binary(),
+            "--resume",
+            session_id,
+            "--output-format",
+            "stream-json",
+            "--channel",
+            "CI",
+        ]
+        if model:
+            cmd.extend(["--model", model])
+        return cmd
+
+    def parse_tui_event(self, raw: str) -> TuiParseResult:
+        """Parse Nessy TUI JSON event."""
+        data = _load_json(raw)
+        if data is None:
+            return TuiParseResult([])
+
+        event_type = data.get("type")
+        if event_type == "session_meta":
+            session_id = data.get("session_id")
+            return TuiParseResult(
+                [],
+                session_id=session_id if isinstance(session_id, str) else None,
+            )
+
+        # Handle assistant messages
+        if event_type == "assistant_message":
+            content = data.get("content", "")
+            if isinstance(content, str) and content:
+                return TuiParseResult([StreamEvent("text", content)])
+
+        # Handle tool calls
+        if event_type == "tool_call":
+            tool_name = data.get("tool_name", "")
+            return TuiParseResult([StreamEvent("status", f"⏳ {tool_name}...")])
+
+        # Handle completion
+        if event_type == "session_end":
+            return TuiParseResult([StreamEvent("result", "")], done=True)
+
+        return TuiParseResult([])
+
+    def parse_exec_event(self, raw: str) -> ExecParseResult:
+        """Parse Nessy subprocess JSON event."""
+        data = _load_json(raw)
+        if data is None:
+            return ExecParseResult([])
+
+        event_type = data.get("type")
+        if event_type == "session_started":
+            session_id = data.get("session_id")
+            return ExecParseResult([], session_id if isinstance(session_id, str) else None)
+
+        if event_type == "assistant_message":
+            content = data.get("content", "")
+            if isinstance(content, str) and content:
+                return ExecParseResult([StreamEvent("text", content)])
+
+        if event_type == "tool_call":
+            tool_name = data.get("tool_name", "")
+            return ExecParseResult([StreamEvent("status", f"⏳ {tool_name}...")])
+
+        if event_type == "session_end":
+            return ExecParseResult([StreamEvent("result", "")])
+
+        return ExecParseResult([])
+
+    def is_prompt_ready(self, pane: str) -> bool:
+        """Check if Nessy TUI is ready for input."""
+        return "\u203a" in pane or "Ready" in pane
+
+    def is_modal_present(self, pane: str) -> bool:
+        """Detect if Nessy shows a modal dialog."""
+        lines = pane.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        tail = "\n".join(lines[-20:]).lower()
+        markers = (
+            "press enter",
+            "confirm",
+            "select",
+            "esc to cancel",
+            "esc to dismiss",
+        )
+        return any(marker in tail for marker in markers)
+
+    def transcript_path_for_state(
+        self, *, cwd: str, session_id: str, transcript_path: str | None
+    ) -> Path | None:
+        """Find Nessy transcript path."""
+        if transcript_path:
+            path = Path(transcript_path)
+            return path if path.exists() else None
+        # Default Nessy session storage
+        nessy_sessions = Path.home() / ".nessy" / "sessions"
+        if nessy_sessions.is_dir():
+            for path in nessy_sessions.glob(f"**/*{session_id}*.jsonl"):
+                return path.resolve()
+        return None
+
+
+NESSY_ADAPTER = NessyAdapter()
+
+
 def is_engine_available(engine: str) -> bool:
     """Return whether the provider CLI can be spawned by the current process."""
     if engine == "claude":
         return shutil.which("claude") is not None
     if engine == "codex":
         return CODEX_ADAPTER._is_safe_binary(Path(CODEX_ADAPTER.binary()))
+    if engine == "nessy":
+        return shutil.which("nessy") is not None
     return False
 
 
 def choose_available_engine(preferred: str = "claude") -> Engine | None:
-    """Pick an installed engine, preferring the requested one and then the other."""
-    if preferred in {"claude", "codex"} and is_engine_available(preferred):
+    """Pick an installed engine, preferring the requested one and then fallbacks.
+    
+    Priority order: preferred -> claude -> codex -> nessy
+    """
+    if preferred in {"claude", "codex", "nessy"} and is_engine_available(preferred):
         return preferred  # type: ignore[return-value]
-    fallback: Engine = "codex" if preferred == "claude" else "claude"
-    if is_engine_available(fallback):
-        return fallback
+    
+    # Fallback chain: claude -> codex -> nessy
+    for fallback in ["claude", "codex", "nessy"]:
+        if fallback != preferred and is_engine_available(fallback):
+            return fallback  # type: ignore[return-value]
+    
     return None
