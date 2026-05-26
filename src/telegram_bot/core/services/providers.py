@@ -655,7 +655,7 @@ class NessyAdapter:
                     text = part.get("text", "")
                     if isinstance(text, str) and text:
                         texts.append(text)
-            
+
             if texts:
                 return TuiParseResult([StreamEvent("text", "\n".join(texts))])
             return TuiParseResult([])
@@ -664,6 +664,35 @@ class NessyAdapter:
         if event_type == "tool_call":
             tool_name = data.get("tool_name", "")
             return TuiParseResult([StreamEvent("status", f"⏳ {tool_name}...")])
+
+        # Handle tool results - show confirmation/approval notifications
+        if event_type == "tool_result":
+            tool_call_result = data.get("toolCallResult", {})
+            status = tool_call_result.get("status", "unknown")
+            result_display = tool_call_result.get("resultDisplay", "")
+            
+            # Extract tool name from function response
+            message = data.get("message", {})
+            parts = message.get("parts", [])
+            tool_name = ""
+            for part in parts:
+                if isinstance(part, dict) and "functionResponse" in part:
+                    tool_name = part["functionResponse"].get("name", "")
+                    break
+            
+            if tool_name:
+                status_emoji = "✅" if status == "success" else "❌"
+                status_text = f"{status_emoji} {tool_name}"
+                if result_display:
+                    # Truncate long results
+                    display = (
+                        result_display[:200] + "..."
+                        if len(result_display) > 200
+                        else result_display
+                    )
+                    status_text = f"{status_emoji} {tool_name}: {display}"
+                return TuiParseResult([StreamEvent("status", status_text)])
+            return TuiParseResult([])
 
         # Handle completion
         if event_type == "session_end":
