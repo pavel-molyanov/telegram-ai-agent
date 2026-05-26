@@ -128,7 +128,12 @@ _BAR_SEPARATOR_RE = re.compile(r"^\s*─{10,}\s*$")
 # form is the discriminator. This short-circuits to "modal" even if a
 # future CC layout accidentally looks like the idle sandwich.
 _MODAL_FOOTER_TOKEN_RE = re.compile(
-    r"\bEsc to (cancel|clear|exit|dismiss|close)\b|\bEnter to confirm\b"
+    r"\bEsc to (cancel|clear|exit|dismiss|close)\b|"
+    r"\bEnter to confirm\b|"
+    # Nessy approval dialog markers
+    r"\bYes, allow once\b|"
+    r"\bYes, allow always\b|"
+    r"\bNo, suggest changes\b"
 )
 
 # CC/Codex collapse very long bracketed-paste payloads into literal
