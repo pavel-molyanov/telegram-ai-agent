@@ -2921,16 +2921,15 @@ class TmuxManager:
         
         Nessy writes transcripts to ~/.nessy/projects/<slug>/chats/<session-id>.jsonl
         Uses start snapshot to find NEW transcripts since session start.
+        Nessy does NOT have session_meta — sessionId is in every message.
         """
-        import json
-        
         try:
             snapshot = self._nessy_start_snapshots.get(channel_key, (set(), time.time()))
             existing, since_wall = snapshot
             nessy_root = Path.home() / ".nessy" / "projects"
             if not nessy_root.exists():
                 raise RuntimeError("Nessy projects directory not found")
-            
+
             # Find NEW transcripts created since session start
             found_path: Path | None = None
             for project_dir in nessy_root.iterdir():
@@ -2939,30 +2938,26 @@ class TmuxManager:
                 chats_dir = project_dir / "chats"
                 if not chats_dir.exists():
                     continue
-                
+
                 for path in chats_dir.glob("*.jsonl"):
                     # Skip pre-existing files
                     if path in existing:
                         continue
                     if path.stat().st_mtime < since_wall:
                         continue
-                    
-                    # Read session_id from metadata
-                    try:
-                        first_line = path.read_text(errors="replace").splitlines()[0]
-                        data = json.loads(first_line)
-                        if data.get("type") == "session_meta":
-                            found_path = path
-                            state.session_id = data.get("session_id", state.session_id)
-                            break
-                    except (OSError, json.JSONDecodeError, IndexError):
-                        continue
+
+                    # Nessy: sessionId is in every message, not just session_meta
+                    # Also: filename IS the session_id
+                    session_id_from_filename = path.stem
+                    found_path = path
+                    state.session_id = session_id_from_filename
+                    break
                 if found_path:
                     break
-            
+
             if found_path is None:
                 raise RuntimeError(f"No Nessy transcript found for session {state.session_id}")
-            
+
             state.transcript_path = str(found_path.resolve())
             self._nessy_start_snapshots.pop(channel_key, None)
             self._save_state()
