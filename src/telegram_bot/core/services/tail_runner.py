@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Protocol
 
 from telegram_bot.core.services.claude import StreamEvent
-from telegram_bot.core.services.providers import CODEX_ADAPTER
+from telegram_bot.core.services.providers import CODEX_ADAPTER, NESSY_ADAPTER
 from telegram_bot.core.tui.transcript import parse_transcript_event
 from telegram_bot.core.types import ChannelKey
 
@@ -351,12 +351,19 @@ class TailRunner:
         """
         for line in lines:
             done = False
-            if getattr(self._state, "provider", "claude") == "codex":
+            provider = getattr(self._state, "provider", "claude")
+            if provider == "codex":
                 parsed = CODEX_ADAPTER.parse_tui_event(line)
                 events = parsed.events
                 new_sid = parsed.session_id
                 done = parsed.done
+            elif provider == "nessy":
+                parsed = NESSY_ADAPTER.parse_tui_event(line)
+                events = parsed.events
+                new_sid = parsed.session_id
+                done = parsed.done
             else:
+                # Claude Code TUI transcript parsing
                 events, new_sid = parse_transcript_event(line)
             if new_sid:
                 # Observability only — state.session_id is owned by
