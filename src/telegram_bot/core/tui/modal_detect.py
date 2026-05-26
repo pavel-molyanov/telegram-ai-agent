@@ -111,6 +111,12 @@ _INPUT_BAR_MARKER_RE = re.compile(r"^\s*❯\s?(?P<rest>.*)$")
 _CODEX_INPUT_BAR_MARKER_RE = re.compile(r"^\s*›\s?(?P<rest>.*)$")
 _CODEX_FOOTER_RE = re.compile(r"\b(gpt-[\w.:-]+|default)\b.*\b(model|effort)\b|·\s*~?/")
 
+# Nessy uses the same boxed sandwich layout as Claude (───── above and below),
+# but its marker is the plain ASCII `>` followed by 2+ spaces, e.g.
+# `>   Type your message or @path/to/file`. The 2+ space gap distinguishes
+# it from quoted/conversational `> ` lines in scrollback.
+_NESSY_INPUT_BAR_MARKER_RE = re.compile(r"^\s*>\s{2,}(?P<rest>.*)$")
+
 # Lines made of `─` box-drawing that delimit the input bar from the
 # footer. When we find one AFTER a `❯` line we stop collecting the bar's
 # wrap continuation — anything below it is a footer, not the bar.
@@ -454,6 +460,55 @@ def claude_input_bar_content(pane: str) -> str | None:
     pick the parser by provider without reaching into private names.
     """
     return _input_bar_content(pane)
+
+
+def _nessy_input_bar_content(pane: str) -> str | None:
+    """Return text inside Nessy's framed `>` prompt line, if present.
+
+    Nessy renders the same `───── / marker / ─────` sandwich as Claude, but
+    its marker is plain ASCII `>` + 2 spaces. Walks bottom-up like Gate B of
+    `_input_bar_content`.
+    """
+    if not pane:
+        return None
+    lines = _strip_blank_tail(pane).splitlines()[-_INPUT_BAR_SEARCH_LINES:]
+    footer = "\n".join(lines[-_MODAL_FOOTER_SCAN_LINES:])
+    if _MODAL_FOOTER_TOKEN_RE.search(footer):
+        return None
+
+    for idx in range(len(lines) - 1, -1, -1):
+        m = _NESSY_INPUT_BAR_MARKER_RE.match(lines[idx])
+        if m is None:
+            continue
+        has_frame_above = any(
+            _BAR_SEPARATOR_RE.match(line) for line in lines[max(0, idx - 3) : idx]
+        )
+        has_frame_below = False
+        for cont in lines[idx + 1 :]:
+            if _BAR_SEPARATOR_RE.match(cont):
+                has_frame_below = True
+                break
+            if _NESSY_INPUT_BAR_MARKER_RE.match(cont):
+                break
+        if not (has_frame_above and has_frame_below):
+            return None
+        parts = [m.group("rest")]
+        for cont in lines[idx + 1 :]:
+            if _BAR_SEPARATOR_RE.match(cont):
+                break
+            if _NESSY_INPUT_BAR_MARKER_RE.match(cont):
+                break
+            if cont.startswith(_CC_CONTINUATION_INDENT):
+                parts.append(cont[len(_CC_CONTINUATION_INDENT) :])
+            else:
+                parts.append(cont)
+        return "\n".join(parts)
+    return None
+
+
+def nessy_input_bar_content(pane: str) -> str | None:
+    """Return the current Nessy input-bar text, if one is visible."""
+    return _nessy_input_bar_content(pane)
 
 
 def collect_diagnostic_signals(

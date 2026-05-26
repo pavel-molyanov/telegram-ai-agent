@@ -126,6 +126,7 @@ from telegram_bot.core.tui.modal_detect import (
     codex_prompt_visible_in_pane,
     collect_diagnostic_signals,
     is_modal_present,
+    nessy_input_bar_content,
     prompt_visible_in_pane,
 )
 from telegram_bot.core.tui.paths import generate_session_uuid, transcript_path
@@ -490,7 +491,7 @@ class TmuxManager:
             session_manager=session_manager,
         )
         transcript_abs: str | None = None
-        
+
         if provider == "codex":
             if resume_session_id is not None:
                 session_id = resume_session_id
@@ -575,8 +576,10 @@ class TmuxManager:
             chat_id=chat_id,
             offset=initial_offset,
             runner_version=(
-                "codex-tui-v1" if provider == "codex"
-                else "nessy-tui-v1" if provider == "nessy"
+                "codex-tui-v1"
+                if provider == "codex"
+                else "nessy-tui-v1"
+                if provider == "nessy"
                 else "claude-tui-v1"
             ),
             provider=provider,
@@ -741,12 +744,18 @@ class TmuxManager:
             )
             raise RuntimeError("CC TUI start timeout")
 
-        # Second readiness gate: the prompt glyph (codex `>` / claude `>` markers) is visible, but
-        # is the input handler actually wired up? Codex in particular
-        # needs ~5-8s after the glyph appears to finish loading MCP
-        # servers; sending a paste during that window is silently lost.
-        # Probe with one dot and wait for it to land in the input bar.
-        get_bar_fn = codex_input_bar_content if provider == "codex" else claude_input_bar_content
+        # Second readiness gate: the prompt glyph (codex single-angle /
+        # claude heavy-angle / nessy plain ASCII `>`) is visible, but is
+        # the input handler actually wired up? Codex in particular needs
+        # ~5-8s after the glyph appears to finish loading MCP servers;
+        # sending a paste during that window is silently lost. Probe
+        # with one dot and wait for it to land in the input bar.
+        bar_fn_by_provider: dict[str, Callable[[str], str | None]] = {
+            "codex": codex_input_bar_content,
+            "nessy": nessy_input_bar_content,
+            "claude": claude_input_bar_content,
+        }
+        get_bar_fn = bar_fn_by_provider.get(provider, claude_input_bar_content)
         ready_input = await self._probe_input_ready(name, get_input_bar_fn=get_bar_fn)
         if not ready_input:
             # Don't kill tmux. A failed probe is the strongest universal
