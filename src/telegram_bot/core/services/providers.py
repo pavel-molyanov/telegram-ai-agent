@@ -622,12 +622,19 @@ class NessyAdapter:
         return cmd
 
     def parse_tui_event(self, raw: str) -> TuiParseResult:
-        """Parse Nessy TUI JSON event."""
+        """Parse Nessy TUI JSON event.
+        
+        Nessy TUI transcript format:
+        - type: "assistant" with message.parts[{text, thought?}]
+        - type: "user" with message.parts[{text}]
+        - type: "system" with subtype for telemetry
+        """
         data = _load_json(raw)
         if data is None:
             return TuiParseResult([])
 
         event_type = data.get("type")
+        
         if event_type == "session_meta":
             session_id = data.get("session_id")
             return TuiParseResult(
@@ -635,11 +642,23 @@ class NessyAdapter:
                 session_id=session_id if isinstance(session_id, str) else None,
             )
 
-        # Handle assistant messages
-        if event_type == "assistant_message":
-            content = data.get("content", "")
-            if isinstance(content, str) and content:
-                return TuiParseResult([StreamEvent("text", content)])
+        # Handle assistant messages - extract text from parts, skip thought blocks
+        if event_type == "assistant":
+            message = data.get("message", {})
+            parts = message.get("parts", [])
+            texts = []
+            for part in parts:
+                if isinstance(part, dict):
+                    # Skip thought blocks (internal reasoning)
+                    if part.get("thought"):
+                        continue
+                    text = part.get("text", "")
+                    if isinstance(text, str) and text:
+                        texts.append(text)
+            
+            if texts:
+                return TuiParseResult([StreamEvent("text", "\n".join(texts))])
+            return TuiParseResult([])
 
         # Handle tool calls
         if event_type == "tool_call":
