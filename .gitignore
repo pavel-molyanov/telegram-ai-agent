@@ -49,6 +49,12 @@ data/.tmp/
 # OS
 .DS_Store
 
+# CodeGraph index
+.codegraph/
+
+# Nessy CLI memory
+.nessy/
+
 # MCP runtime configs (may contain credentials)
 .mcp.json
 .mcp.bot.json
