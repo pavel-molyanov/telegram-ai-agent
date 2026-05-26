@@ -2229,6 +2229,30 @@ class TmuxManager:
                         await self.close_buffer(channel_key)
                         return ""
 
+                if state.provider == "nessy" and not state.transcript_path:
+                    try:
+                        await self._locate_nessy_transcript_after_send(channel_key, state)
+                    except RuntimeError:
+                        logger.warning(
+                            "Nessy TUI transcript discovery failed after delivery; "
+                            "leaving session alive channel=%s session=%s",
+                            channel_key,
+                            state.session_name,
+                            exc_info=True,
+                        )
+                        ret = on_event(
+                            StreamEvent(
+                                "result_message",
+                                "Nessy приняла сообщение, но бот не смог найти transcript "
+                                "для стриминга ответа. Сессия оставлена живой; открой /tui "
+                                "или отправь следующее сообщение после завершения работы.",
+                            )
+                        )
+                        if asyncio.iscoroutine(ret):
+                            await ret
+                        await self.close_buffer(channel_key)
+                        return ""
+
                 output_path = self._transcript_path_for_state(state)
             if output_path is None:
                 target = state.session_name if state else channel_key
@@ -2419,6 +2443,13 @@ class TmuxManager:
         # legacy or malformed ids.
         if state.provider == "codex":
             target_transcript = self._find_codex_transcript(new_session_id, state.cwd)
+        elif state.provider == "nessy":
+            from telegram_bot.core.services.providers import NESSY_ADAPTER
+            target_transcript = NESSY_ADAPTER.transcript_path_for_state(
+                cwd=state.cwd,
+                session_id=new_session_id,
+                transcript_path=None,
+            )
         else:
             from telegram_bot.core.tui.paths import _SESSION_ID_RE
 
@@ -2478,7 +2509,9 @@ class TmuxManager:
             self._save_state()
             raise
         state.session_id = new_session_id
-        state.transcript_path = str(target_transcript) if state.provider == "codex" else None
+        state.transcript_path = (
+            str(target_transcript) if state.provider in ("codex", "nessy") else None
+        )
         # Seed past all events already in the target transcript — offset=0
         # would re-emit every historical event through on_event.
         state.offset = self._file_size(target_transcript)
@@ -2862,8 +2895,66 @@ class TmuxManager:
         self._codex_start_snapshots.pop(channel_key, None)
         self._save_state()
 
+    async def _locate_nessy_transcript_after_send(
+        self, channel_key: ChannelKey, state: TmuxSessionState
+    ) -> None:
+        """Locate Nessy TUI transcript after sending a message.
+        
+        Nessy writes transcripts to ~/.nessy/sessions/ as JSONL.
+        We scan for new files since session start and match by cwd.
+        """
+        import json
+        
+        try:
+            # For Nessy, we use the adapter's transcript discovery
+            # Nessy session IDs are UUIDs, and transcripts are in ~/.nessy/sessions/
+            nessy_sessions_dir = Path.home() / ".nessy" / "sessions"
+            if not nessy_sessions_dir.exists():
+                raise RuntimeError("Nessy sessions directory not found")
+            
+            # Find the most recent transcript for this cwd
+            found_path: Path | None = None
+            for path in nessy_sessions_dir.glob("**/*.jsonl"):
+                # Check if this transcript matches our session
+                try:
+                    first_line = path.read_text(errors="replace").splitlines()[0]
+                    data = json.loads(first_line)
+                    if data.get("type") == "session_meta":
+                        session_cwd = data.get("cwd", "")
+                        session_id = data.get("session_id", "")
+                        if session_cwd == state.cwd and session_id == state.session_id:
+                            found_path = path
+                            break
+                except (OSError, json.JSONDecodeError, IndexError):
+                    continue
+
+            if found_path is None:
+                # Fallback: use the most recent transcript for this cwd
+                for path in sorted(nessy_sessions_dir.glob("**/*.jsonl"),
+                                   key=lambda p: p.stat().st_mtime, reverse=True):
+                    try:
+                        first_line = path.read_text(errors="replace").splitlines()[0]
+                        data = json.loads(first_line)
+                        if data.get("type") == "session_meta" and data.get("cwd") == state.cwd:
+                            found_path = path
+                            break
+                    except (OSError, json.JSONDecodeError, IndexError):
+                        continue
+            
+            if found_path is None:
+                raise RuntimeError("No Nessy transcript found")
+            
+            state.transcript_path = str(found_path.resolve())
+            self._save_state()
+        except Exception:
+            raise RuntimeError("Nessy TUI transcript discovery failed") from None
+
     def _transcript_path_for_state(self, state: TmuxSessionState) -> Path | None:
         if state.provider == "codex":
+            if not state.transcript_path:
+                return None
+            return Path(state.transcript_path)
+        if state.provider == "nessy":
             if not state.transcript_path:
                 return None
             return Path(state.transcript_path)
