@@ -248,6 +248,7 @@ class TmuxManager:
         # (Decision 7). Cleared once the tail sees the file.
         self._spawn_deadlines: dict[ChannelKey, float] = {}
         self._codex_start_snapshots: dict[ChannelKey, tuple[set[Path], float]] = {}
+        self._nessy_start_snapshots: dict[ChannelKey, tuple[set[Path], float]] = {}
         # Channels whose most recent _spawn_tmux passed prompt-readiness but
         # failed the input probe (probe budget elapsed without the test char
         # appearing in the input bar). Set by `_spawn_tmux`, consumed by
@@ -639,6 +640,19 @@ class TmuxManager:
         # baseline and pick up unrelated transcripts.
         if provider == "codex" and resume_session_id is None:
             self._codex_start_snapshots[channel_key] = (existing, since_wall)
+        
+        # For Nessy, we also need to snapshot existing transcripts before spawn
+        # so _locate_nessy_transcript_after_send can find the NEW session.
+        if provider == "nessy" and resume_session_id is None:
+            nessy_root = Path.home() / ".nessy" / "projects"
+            existing_nessy: set[Path] = set()
+            if nessy_root.exists():
+                for project_dir in nessy_root.iterdir():
+                    if project_dir.is_dir():
+                        chats_dir = project_dir / "chats"
+                        if chats_dir.exists():
+                            existing_nessy.update(chats_dir.glob("*.jsonl"))
+            self._nessy_start_snapshots[channel_key] = (existing_nessy, time.time())
 
         self._sessions[channel_key] = state
         self._save_state()
@@ -2901,17 +2915,18 @@ class TmuxManager:
         """Locate Nessy TUI transcript after sending a message.
         
         Nessy writes transcripts to ~/.nessy/projects/<slug>/chats/<session-id>.jsonl
-        where <slug> is derived from the cwd.
+        Uses start snapshot to find NEW transcripts since session start.
         """
         import json
         
         try:
-            # Nessy stores sessions per-project: ~/.nessy/projects/<slug>/chats/<id>.jsonl
+            snapshot = self._nessy_start_snapshots.get(channel_key, (set(), time.time()))
+            existing, since_wall = snapshot
             nessy_root = Path.home() / ".nessy" / "projects"
             if not nessy_root.exists():
                 raise RuntimeError("Nessy projects directory not found")
             
-            # Find transcript by session_id in any project directory
+            # Find NEW transcripts created since session start
             found_path: Path | None = None
             for project_dir in nessy_root.iterdir():
                 if not project_dir.is_dir():
@@ -2920,19 +2935,20 @@ class TmuxManager:
                 if not chats_dir.exists():
                     continue
                 
-                # Try exact session_id match
-                candidate = chats_dir / f"{state.session_id}.jsonl"
-                if candidate.exists():
-                    found_path = candidate
-                    break
-                
-                # Fallback: scan for matching session in metadata
                 for path in chats_dir.glob("*.jsonl"):
+                    # Skip pre-existing files
+                    if path in existing:
+                        continue
+                    if path.stat().st_mtime < since_wall:
+                        continue
+                    
+                    # Read session_id from metadata
                     try:
                         first_line = path.read_text(errors="replace").splitlines()[0]
                         data = json.loads(first_line)
-                        if data.get("session_id") == state.session_id:
+                        if data.get("type") == "session_meta":
                             found_path = path
+                            state.session_id = data.get("session_id", state.session_id)
                             break
                     except (OSError, json.JSONDecodeError, IndexError):
                         continue
@@ -2943,6 +2959,7 @@ class TmuxManager:
                 raise RuntimeError(f"No Nessy transcript found for session {state.session_id}")
             
             state.transcript_path = str(found_path.resolve())
+            self._nessy_start_snapshots.pop(channel_key, None)
             self._save_state()
         except Exception:
             raise RuntimeError("Nessy TUI transcript discovery failed") from None
