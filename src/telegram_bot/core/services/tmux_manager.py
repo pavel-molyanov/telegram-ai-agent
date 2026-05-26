@@ -482,7 +482,7 @@ class TmuxManager:
         model: str | None = None,
     ) -> None:
         """Create (or resume) a tmux session with a persistent CC TUI process."""
-        name = self._make_name(channel_key)
+        name = self._make_name(channel_key, provider=provider)
         session_dir = self._sessions_dir / name
         base_mcp_config = mcp_config
         mcp_config = self._ensure_runtime_mcp_config(
@@ -2804,9 +2804,14 @@ class TmuxManager:
 
     # --- Internal helpers ---
 
-    def _make_name(self, channel_key: ChannelKey) -> str:
-        """Channel-key → tmux session name, using the configured prefix."""
-        return make_session_name(channel_key, prefix=self._session_name_prefix)
+    def _make_name(self, channel_key: ChannelKey, provider: str = "claude") -> str:
+        """Channel-key → tmux session name, using provider-specific prefix."""
+        prefix = (
+            "codex-" if provider == "codex"
+            else "nessy-" if provider == "nessy"
+            else "cc-"
+        )
+        return make_session_name(channel_key, prefix=prefix)
 
     def _ensure_runtime_mcp_config(
         self,
