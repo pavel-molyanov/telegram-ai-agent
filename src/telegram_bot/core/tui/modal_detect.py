@@ -370,25 +370,7 @@ def _prompt_visible_in_bar(before_bar: str | None, after_bar: str | None, prompt
 
 
 def is_modal_present(pane: str) -> bool:
-    """True if the pane's footer carries a known modal dismiss token.
-
-    Uses Gate A (capital-E footer-token scan) in isolation — unlike
-    `_input_bar_content`, this does NOT require the full sandwich
-    structure to conclude "no modal". The sandwich check (Gate B) is
-    skipped on purpose here because it returns None on any transient
-    render state (CC startup, pane refresh mid-tick, empty/broken
-    capture), which would produce spurious idle-time alerts. Gate A
-    is tight: real modals always advertise their dismiss keys with
-    the capital-E forms (`Esc to cancel|clear|exit|dismiss|close`,
-    `Enter to confirm`), while idle / thinking / compacting states
-    use lowercase `esc to interrupt`.
-
-    Used by the TmuxManager modal watchdog to surface modals that pop
-    while CC is working autonomously (Bash permission, /usage, auto-
-    compact confirmations) and no user message is in flight — the
-    send_direct send-and-verify flow only catches those when a user
-    tries to send, which may be hours later.
-    """
+    """True if the pane's footer carries a known modal dismiss token."""
     if not pane:
         return False
     lines = _strip_blank_tail(pane).splitlines()[-_MODAL_FOOTER_SCAN_LINES:]

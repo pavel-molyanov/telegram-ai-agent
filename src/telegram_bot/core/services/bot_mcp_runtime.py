@@ -88,6 +88,14 @@ def ensure_bot_runtime_mcp_config(
 
     raw_bot = servers.get("bot")
     bot_server = dict(raw_bot) if isinstance(raw_bot, dict) else _standard_bot_server(root)
+    # Always normalize command/args to absolute paths derived from `root`. Older
+    # runtime configs created with a relative `mcp-servers/bot/start.sh` survive
+    # in tmux_sessions/<name>/mcp.runtime.json and bash cannot find them from a
+    # topic cwd outside the bot project root — Claude with --strict-mcp-config
+    # then exits immediately and `_spawn_tmux` reports "CC TUI start timeout".
+    expected = _standard_bot_server(root)
+    bot_server["command"] = expected["command"]
+    bot_server["args"] = expected["args"]
     raw_env = bot_server.get("env")
     env = dict(raw_env) if isinstance(raw_env, dict) else {}
     env.setdefault("PROJECT_DIR", str(root))

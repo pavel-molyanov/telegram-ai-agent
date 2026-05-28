@@ -640,7 +640,7 @@ class TmuxManager:
         # baseline and pick up unrelated transcripts.
         if provider == "codex" and resume_session_id is None:
             self._codex_start_snapshots[channel_key] = (existing, since_wall)
-        
+
         # For Nessy, we also need to snapshot existing transcripts before spawn
         # so _locate_nessy_transcript_after_send can find the NEW session.
         if provider == "nessy" and resume_session_id is None:
@@ -2459,6 +2459,7 @@ class TmuxManager:
             target_transcript = self._find_codex_transcript(new_session_id, state.cwd)
         elif state.provider == "nessy":
             from telegram_bot.core.services.providers import NESSY_ADAPTER
+
             target_transcript = NESSY_ADAPTER.transcript_path_for_state(
                 cwd=state.cwd,
                 session_id=new_session_id,
@@ -2806,11 +2807,7 @@ class TmuxManager:
 
     def _make_name(self, channel_key: ChannelKey, provider: str = "claude") -> str:
         """Channel-key → tmux session name, using provider-specific prefix."""
-        prefix = (
-            "codex-" if provider == "codex"
-            else "nessy-" if provider == "nessy"
-            else "cc-"
-        )
+        prefix = "codex-" if provider == "codex" else "nessy-" if provider == "nessy" else "cc-"
         return make_session_name(channel_key, prefix=prefix)
 
     def _ensure_runtime_mcp_config(
@@ -2918,19 +2915,23 @@ class TmuxManager:
         self, channel_key: ChannelKey, state: TmuxSessionState
     ) -> None:
         """Locate Nessy TUI transcript after sending a message.
-        
+
         Nessy writes transcripts to ~/.nessy/projects/<slug>/chats/<session-id>.jsonl
         Uses start snapshot to find NEW transcripts since session start.
-        Nessy does NOT have session_meta — sessionId is in every message.
+        Nessy does NOT have session_meta — sessionId is in every message;
+        the chat JSONL is created only after Nessy processes the first user
+        prompt, which adds ~100-500ms latency after tmux send-keys. The
+        retry loop mirrors `CodexAdapter.locate_tui_transcript` so the first
+        message in a fresh topic does not race-fail on a not-yet-written file.
         """
-        try:
-            snapshot = self._nessy_start_snapshots.get(channel_key, (set(), time.time()))
-            existing, since_wall = snapshot
-            nessy_root = Path.home() / ".nessy" / "projects"
-            if not nessy_root.exists():
-                raise RuntimeError("Nessy projects directory not found")
+        snapshot = self._nessy_start_snapshots.get(channel_key, (set(), time.time()))
+        existing, since_wall = snapshot
+        nessy_root = Path.home() / ".nessy" / "projects"
+        if not nessy_root.exists():
+            raise RuntimeError("Nessy projects directory not found")
 
-            # Find NEW transcripts created since session start
+        deadline = time.monotonic() + 30.0
+        while time.monotonic() < deadline:
             found_path: Path | None = None
             for project_dir in nessy_root.iterdir():
                 if not project_dir.is_dir():
@@ -2938,31 +2939,29 @@ class TmuxManager:
                 chats_dir = project_dir / "chats"
                 if not chats_dir.exists():
                     continue
-
                 for path in chats_dir.glob("*.jsonl"):
-                    # Skip pre-existing files
                     if path in existing:
                         continue
                     if path.stat().st_mtime < since_wall:
                         continue
-
-                    # Nessy: sessionId is in every message, not just session_meta
-                    # Also: filename IS the session_id
-                    session_id_from_filename = path.stem
+                    # Nessy: filename IS the session_id; no session_meta payload.
                     found_path = path
-                    state.session_id = session_id_from_filename
+                    state.session_id = path.stem
                     break
                 if found_path:
                     break
 
-            if found_path is None:
-                raise RuntimeError(f"No Nessy transcript found for session {state.session_id}")
+            if found_path is not None:
+                state.transcript_path = str(found_path.resolve())
+                self._nessy_start_snapshots.pop(channel_key, None)
+                self._save_state()
+                return
 
-            state.transcript_path = str(found_path.resolve())
-            self._nessy_start_snapshots.pop(channel_key, None)
-            self._save_state()
-        except Exception:
-            raise RuntimeError("Nessy TUI transcript discovery failed") from None
+            await asyncio.sleep(0.2)
+
+        raise RuntimeError(
+            f"Nessy TUI transcript not materialised within 30s for session {state.session_id}"
+        )
 
     def _transcript_path_for_state(self, state: TmuxSessionState) -> Path | None:
         if state.provider == "codex":

@@ -21,6 +21,7 @@ from telegram_bot.core.handlers.mode import router as mode_router
 from telegram_bot.core.handlers.photo import cleanup_old_tmp_files, ensure_tmp_dir
 from telegram_bot.core.handlers.photo import router as photo_router
 from telegram_bot.core.handlers.streaming import send_streaming_response
+from telegram_bot.core.handlers.tail import router as tail_router
 from telegram_bot.core.handlers.text import router as text_router
 from telegram_bot.core.handlers.voice import router as voice_router
 from telegram_bot.core.keyboards import topic_keyboard
@@ -103,6 +104,7 @@ async def _start() -> None:
     )
     tmux_manager.wire_live_buffer(bot=bot, topic_config=topic_config)
     tmux_manager.restore_all()
+    tmux_manager.start_modal_watchdog()
     session_manager = SessionManager(settings, topic_config=topic_config)
     transcriber = Transcriber(settings)
     forward_batcher = ForwardBatcher(bot=bot)
@@ -142,6 +144,7 @@ async def _start() -> None:
     dp.include_router(forward_router)
     dp.include_router(voice_router)
     dp.include_router(photo_router)
+    dp.include_router(tail_router)
     dp.include_router(text_router)
 
     dp["session_manager"] = session_manager
