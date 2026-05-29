@@ -114,15 +114,35 @@ async def await_prompt_ready(
     Due to the 5s fallback window, the minimum wall-time to a False result
     is ~5s even if `timeout` is smaller.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     clock = clock or time.monotonic
     deadline = clock() + timeout
     trust_handled = False
     pane = ""  # captured in loop; initialized so the timeout log never UnboundLocalError.
-
+    
+    poll_count = 0
     while clock() < deadline:
+        poll_count += 1
         try:
             pane = await asyncio.to_thread(_capture_pane, session_name)
-        except subprocess.CalledProcessError:
+            if poll_count <= 3 or poll_count % 10 == 0:
+                logger.info(
+                    "TUI_IO: capture-pane poll=%d session=%s pane_len=%d pane_preview=%r",
+                    poll_count,
+                    session_name,
+                    len(pane),
+                    pane[:100] if pane else "",
+                )
+        except subprocess.CalledProcessError as e:
+            logger.warning(
+                "TUI_IO: capture-pane CalledProcessError poll=%d session=%s returncode=%d stderr=%r",
+                poll_count,
+                session_name,
+                e.returncode,
+                e.stderr[:200] if e.stderr else "",
+            )
             return False
 
         if is_trust_dialog(pane) and not trust_handled:
@@ -132,6 +152,7 @@ async def await_prompt_ready(
             continue
 
         if is_prompt_ready(pane):
+            logger.info("TUI_IO: prompt ready poll=%d session=%s", poll_count, session_name)
             return True
 
         await asyncio.sleep(_POLL_INTERVAL_SEC)

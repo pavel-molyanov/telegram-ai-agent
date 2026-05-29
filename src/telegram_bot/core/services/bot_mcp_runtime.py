@@ -116,4 +116,9 @@ def ensure_bot_runtime_mcp_config(
     finally:
         with contextlib.suppress(FileNotFoundError):
             tmp_path.unlink()
-    return str(runtime_path)
+    # Return an absolute path — callers feed this directly into
+    # `claude --mcp-config <path>` and the spawned process runs with the
+    # topic cwd (e.g. /Users/.../ecom_merchants_partners), so a relative
+    # path like "tmux_sessions/<name>/mcp.runtime.json" resolves to a
+    # non-existent file and `--strict-mcp-config` instantly exits Claude.
+    return str(runtime_path.resolve())

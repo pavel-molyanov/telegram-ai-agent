@@ -721,8 +721,20 @@ class TmuxManager:
             "50",
             *startup_cmd,
         ]
+        logger.info(
+            "TUI_IO: spawning tmux session=%s cmd=%s cwd=%s",
+            name,
+            " ".join(new_session_argv[1:]),
+            cwd,
+        )
         result = await asyncio.to_thread(
             subprocess.run, new_session_argv, capture_output=True, text=True, cwd=cwd
+        )
+        logger.info(
+            "TUI_IO: tmux new-session result=%d stdout=%r stderr=%r",
+            result.returncode,
+            result.stdout[:200] if result.stdout else "",
+            result.stderr[:200] if result.stderr else "",
         )
         if result.returncode != 0:
             stderr = result.stderr.strip()
@@ -746,6 +758,16 @@ class TmuxManager:
                 stderr = result.stderr.strip()
             if result.returncode != 0:
                 raise RuntimeError(f"tmux new-session failed: {stderr}")
+
+        # Check if session actually exists after new-session
+        session_exists = await asyncio.to_thread(
+            subprocess.run, ["tmux", "has-session", "-t", f"={name}"], capture_output=True
+        )
+        logger.info(
+            "TUI_IO: session_exists=%d for %s",
+            session_exists.returncode,
+            name,
+        )
 
         remaining = max(deadline - time.monotonic(), 0.0)
         if provider == "codex":
