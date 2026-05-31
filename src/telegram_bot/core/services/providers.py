@@ -1050,3 +1050,12 @@ PROVIDER_REGISTRY: dict[Engine, ProviderAdapter] = {
     "codex": CODEX_ADAPTER,
     "nessy": NESSY_ADAPTER,
 }
+
+
+def get_adapter(provider: str) -> ProviderAdapter:
+    """Return the ProviderAdapter for the given engine name, defaulting to Claude."""
+    _registry = PROVIDER_REGISTRY  # narrowed: dict[Engine, ProviderAdapter]
+    for key, adapter in _registry.items():
+        if key == provider:
+            return adapter
+    return CLAUDE_ADAPTER

@@ -24,6 +24,10 @@ from pathlib import Path
 from typing import Any
 
 from telegram_bot.core.services.claude import Mode
+from telegram_bot.core.services.providers import (
+    PROVIDER_REGISTRY,
+    get_adapter,
+)
 from telegram_bot.core.types import ChannelKey
 
 logger = logging.getLogger(__name__)
@@ -160,10 +164,8 @@ def peek_saved_session(store: StateStore, channel_key: ChannelKey, cwd: str) -> 
     data = _normalize_state_dict(entry)
     rv = data.get("runner_version")
     provider = data.get("provider", "claude")
-    if not (
-        (provider == "claude" and rv in {"tui-v1", "claude-tui-v1"})
-        or (provider == "codex" and rv == "codex-tui-v1")
-    ):
+    adapter = get_adapter(provider)
+    if rv != adapter.runner_version_tag():
         logger.debug(
             "peek_saved_session: %s runner_version=%s unsupported, skipping",
             key_str,
@@ -245,12 +247,13 @@ def scan_orphan_tmux_sessions(state_path: Path) -> list[str]:
         return []
 
     orphans: list[str] = []
+    recognized_versions = {adapter.runner_version_tag() for adapter in PROVIDER_REGISTRY.values()}
     for raw_name in result.stdout.splitlines():
         name = raw_name.strip()
         if not name or not name.startswith("cc-"):
             continue
         marker = state_markers.get(name)
-        if marker not in {"tui-v1", "claude-tui-v1", "codex-tui-v1"}:
+        if marker not in recognized_versions:
             orphans.append(name)
 
     return sorted(orphans)

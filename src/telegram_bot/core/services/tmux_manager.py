@@ -54,7 +54,11 @@ from typing import Literal
 from telegram_bot.core.messages import t
 from telegram_bot.core.services.bot_mcp_runtime import ensure_bot_runtime_mcp_config
 from telegram_bot.core.services.claude import Mode, StreamEvent
-from telegram_bot.core.services.providers import CODEX_ADAPTER, NESSY_ADAPTER
+from telegram_bot.core.services.providers import (
+    CODEX_ADAPTER,
+    NESSY_ADAPTER,
+    get_adapter,
+)
 from telegram_bot.core.services.tail_runner import TailRunner
 from telegram_bot.core.services.tmux_modal_watchdog import (
     ModalWatchdog,
@@ -562,13 +566,7 @@ class TmuxManager:
             mcp_config=mcp_config,
             chat_id=chat_id,
             offset=initial_offset,
-            runner_version=(
-                "codex-tui-v1"
-                if provider == "codex"
-                else "nessy-tui-v1"
-                if provider == "nessy"
-                else "claude-tui-v1"
-            ),
+            runner_version=get_adapter(provider).runner_version_tag(),
             provider=provider,
             model=model,
             transcript_path=transcript_abs,
@@ -2502,7 +2500,7 @@ class TmuxManager:
 
     def _make_name(self, channel_key: ChannelKey, provider: str = "claude") -> str:
         """Channel-key → tmux session name, using provider-specific prefix."""
-        prefix = "codex-" if provider == "codex" else "nessy-" if provider == "nessy" else "cc-"
+        prefix = get_adapter(provider).session_name_prefix()
         return make_session_name(channel_key, prefix=prefix)
 
     def _ensure_runtime_mcp_config(
@@ -2538,13 +2536,7 @@ class TmuxManager:
 
     @staticmethod
     def _validate_session_id_shape(session_id: str, provider: str) -> bool:
-        if provider == "codex":
-            from telegram_bot.core.tui.paths import _CODEX_SESSION_ID_RE
-
-            return bool(_CODEX_SESSION_ID_RE.fullmatch(session_id))
-        from telegram_bot.core.tui.paths import _SESSION_ID_RE
-
-        return bool(_SESSION_ID_RE.fullmatch(session_id))
+        return get_adapter(provider).validate_session_id(session_id)
 
     def _build_state_for_resume(
         self,
@@ -2565,7 +2557,7 @@ class TmuxManager:
             mcp_config=runtime.mcp_config or "",
             chat_id=channel_key[0],
             offset=0,
-            runner_version="codex-tui-v1" if provider == "codex" else "claude-tui-v1",
+            runner_version=get_adapter(provider).runner_version_tag(),
             provider=provider,
             model=runtime.model,
             transcript_path=str(transcript_path) if provider == "codex" else None,
