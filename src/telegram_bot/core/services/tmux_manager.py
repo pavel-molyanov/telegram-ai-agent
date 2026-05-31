@@ -97,9 +97,6 @@ from telegram_bot.core.services.tmux_spawn import (
     spawn_tmux_sync,
 )
 from telegram_bot.core.services.tmux_spawn import (
-    query_pane_width as _query_pane_width,
-)
-from telegram_bot.core.services.tmux_spawn import (
     tmux_alive as _tmux_alive_fn,
 )
 from telegram_bot.core.services.tmux_state import (
@@ -124,7 +121,6 @@ from telegram_bot.core.tui.modal_detect import (
     claude_input_bar_content,
     codex_input_bar_content,
     codex_prompt_visible_in_pane,
-    collect_diagnostic_signals,
     is_modal_present,
     nessy_input_bar_content,
     prompt_visible_in_pane,
@@ -162,16 +158,6 @@ _ENTER_RETRY_LIMIT = 3
 _CODEX_PASTE_RETRY_LIMIT = 3
 _CODEX_PASTE_POLL_BUDGET_SEC = 1.5
 _CODEX_PASTE_POLL_STEP_SEC = 0.1
-
-# Claude `_safe_send_and_enter` paste-retry budget. Symmetric with codex
-# above — covers the cold-start race observed 2026-04-26 23:22 UTC where
-# a freshly spawned claude (engine switch) still warmed up its input bar
-# 1+ seconds after `await_prompt_ready` returned True; a single 0.5s
-# poll missed the paste and the bot mis-fired a modal_alert. With three
-# 1s attempts the warm-up window is comfortably covered.
-_CLAUDE_PASTE_RETRY_LIMIT = 3
-_CLAUDE_PASTE_POLL_BUDGET_SEC = 1.0
-_CLAUDE_PASTE_POLL_STEP_SEC = 0.1
 
 # `_send_with_modal_guard` settle pauses. Bracketed paste lands as one
 # event in Claude TUI, but the renderer needs a frame to absorb it before
@@ -979,18 +965,6 @@ class TmuxManager:
         """True if a tail loop is already running for this channel."""
         return channel_key in self._cancel_events
 
-    @staticmethod
-    def _claude_input_changed(pane_before: str, pane_after: str) -> bool:
-        """True when Claude's input bar changed without verified delivery.
-
-        A changed bar means the paste likely affected the TUI, but the stricter
-        delivery guard could not prove it is fresh. Re-pasting in that state can
-        duplicate user input, so the send path stops and surfaces an alert.
-        """
-        before_bar = claude_input_bar_content(pane_before)
-        after_bar = claude_input_bar_content(pane_after)
-        return after_bar is not None and after_bar != before_bar
-
     async def _send_with_modal_guard(
         self,
         channel_key: ChannelKey,
@@ -1144,331 +1118,10 @@ class TmuxManager:
         item — potentially approving a shell command or switching the
         model. That risk dominates all trade-offs here.
         """
-        session_name = state.session_name
         if state.provider == "codex":
             return await self._safe_send_codex(channel_key, state, prompt)
 
-        # Claude path: simplified modal-guard pipeline. The legacy paste-
-        # retry / Enter-retry loop below is unreachable dead code, kept on
-        # purpose for one iteration so a `git revert` of the dispatch line
-        # restores the old behaviour without a textual conflict.
-        #
-        # TODO(2026-05-15): if no rollback incidents, remove the dead block
-        # below (everything in this method after this return), the helper
-        # `_send_enter_until_prompt_clears`, the static `_claude_input_changed`,
-        # the orphaned `session_name` local on the previous line, the
-        # `_CLAUDE_PASTE_RETRY_LIMIT` / `_CLAUDE_PASTE_POLL_*` constants, and
-        # the three direct-invocation tests of `_send_enter_until_prompt_clears`
-        # in tests/test_tmux_wave3_fixes.py (lines 131, 164, 200) which only
-        # pin the unreachable behaviour.
         return await self._send_with_modal_guard(channel_key, state, prompt)
-
-        baseline_captured_at = time.monotonic()
-        pane_before = await capture_pane(session_name)
-        if is_modal_present(pane_before):
-            await self._send_modal_alert(
-                channel_key, state, prompt, pane_before, reason="claude_modal_before_send"
-            )
-            return False
-
-        # Paste-with-retry loop. Symmetric with `_safe_send_codex`: a
-        # freshly spawned claude can still be warming up after
-        # `await_prompt_ready` reports True (observed 2026-04-26 23:22
-        # UTC after engine switch — the first paste landed in the input
-        # bar 1+ seconds late, well past the original single 0.5s poll).
-        # Three attempts, each polling for paste visibility within
-        # `_CLAUDE_PASTE_POLL_BUDGET_SEC`. A modal popping mid-paste
-        # short-circuits to a modal alert; only after all retries fail
-        # do we declare the paste lost.
-        pane_after = pane_before
-        delivered = False
-        for paste_attempt in range(1, _CLAUDE_PASTE_RETRY_LIMIT + 1):
-            # Double-check before re-pasting (see codex counterpart for
-            # the full incident note): if claude finally rendered the
-            # previous paste between attempts, sending another one would
-            # leave a duplicate copy in the input bar.
-            if paste_attempt > 1:
-                pane_recheck = await capture_pane(session_name)
-                if is_modal_present(pane_recheck):
-                    logger.info(
-                        "TUI_IO: claude modal raced into pane between paste attempts "
-                        "session=%s attempt=%d",
-                        session_name,
-                        paste_attempt,
-                    )
-                    await self._send_modal_alert(
-                        channel_key,
-                        state,
-                        prompt,
-                        pane_recheck,
-                        reason="claude_modal_during_paste",
-                    )
-                    return False
-                if prompt_visible_in_pane(pane_before, pane_recheck, prompt):
-                    logger.info(
-                        "TUI_IO: claude previous paste landed late session=%s attempt=%d",
-                        session_name,
-                        paste_attempt,
-                    )
-                    pane_after = pane_recheck
-                    delivered = True
-                    break
-                if self._claude_input_changed(pane_before, pane_recheck):
-                    logger.info(
-                        "TUI_IO: claude input changed without verified delivery "
-                        "session=%s attempt=%d; refusing repeat paste",
-                        session_name,
-                        paste_attempt,
-                    )
-                    pane_after = pane_recheck
-                    break
-
-            try:
-                await send_text_to_tmux(session_name, prompt, submit_enter=False)
-            except (OSError, subprocess.SubprocessError):
-                logger.warning(
-                    "TUI_IO: send -l failed session=%s attempt=%d (reason=send-keys-error)",
-                    session_name,
-                    paste_attempt,
-                )
-                await self._send_modal_alert(
-                    channel_key, state, prompt, pane_before, reason="claude_send_error"
-                )
-                return False
-
-            # Guarantee at least one capture even when budget is zero
-            # (unit tests patch the budget to avoid spinning the poll
-            # loop in real time; without do-while semantics they would
-            # never observe the paste landing).
-            deadline = time.monotonic() + _CLAUDE_PASTE_POLL_BUDGET_SEC
-            modal_seen = False
-            while True:
-                await asyncio.sleep(_CLAUDE_PASTE_POLL_STEP_SEC)
-                pane_after = await capture_pane(session_name)
-                if is_modal_present(pane_after):
-                    modal_seen = True
-                    break
-                if prompt_visible_in_pane(pane_before, pane_after, prompt):
-                    delivered = True
-                    break
-                if self._claude_input_changed(pane_before, pane_after):
-                    logger.info(
-                        "TUI_IO: claude input changed without verified delivery "
-                        "session=%s attempt=%d; refusing repeat paste",
-                        session_name,
-                        paste_attempt,
-                    )
-                    break
-                if time.monotonic() >= deadline:
-                    break
-
-            if modal_seen:
-                logger.info(
-                    "TUI_IO: send BLOCKED session=%s reason=claude_modal_during_paste attempt=%d",
-                    session_name,
-                    paste_attempt,
-                )
-                await self._send_modal_alert(
-                    channel_key,
-                    state,
-                    prompt,
-                    pane_after,
-                    reason="claude_modal_during_paste",
-                )
-                return False
-            if delivered:
-                break
-
-            logger.info(
-                "TUI_IO: claude paste not yet visible session=%s attempt=%d; retrying",
-                session_name,
-                paste_attempt,
-            )
-
-        if not delivered:
-            logger.info(
-                "TUI_IO: send BLOCKED session=%s len=%d reason=claude_paste_not_visible",
-                session_name,
-                len(prompt),
-            )
-            elapsed_ms = int((time.monotonic() - baseline_captured_at) * 1000)
-            pane_width = await _query_pane_width(session_name)
-            signals = collect_diagnostic_signals(
-                pane_before,
-                pane_after,
-                prompt,
-                elapsed_ms=elapsed_ms,
-                pane_width=pane_width,
-            )
-            pane_tail = "\n".join(pane_after.splitlines()[-_MODAL_DIAG_PANE_TAIL_LINES:])
-            logger.info(
-                "TUI_IO: BLOCKED diag session=%s signals=%s pane_tail=\n%s",
-                session_name,
-                signals,
-                pane_tail,
-            )
-            await self._send_modal_alert(
-                channel_key,
-                state,
-                prompt,
-                pane_after or pane_before,
-                reason="claude_paste_not_visible",
-            )
-            return False
-
-        # Pre-Enter re-capture — closes the narrow race where a modal
-        # pops AFTER our verify but BEFORE we hit Enter.
-        pane_pre_enter = await capture_pane(session_name)
-        if not prompt_visible_in_pane(pane_before, pane_pre_enter, prompt):
-            logger.info(
-                "TUI_IO: send RACE session=%s reason=modal-before-enter",
-                session_name,
-            )
-            elapsed_ms = int((time.monotonic() - baseline_captured_at) * 1000)
-            pane_width = await _query_pane_width(session_name)
-            signals = collect_diagnostic_signals(
-                pane_before,
-                pane_pre_enter,
-                prompt,
-                elapsed_ms=elapsed_ms,
-                pane_width=pane_width,
-            )
-            pane_tail = "\n".join(pane_pre_enter.splitlines()[-_MODAL_DIAG_PANE_TAIL_LINES:])
-            logger.info(
-                "TUI_IO: RACE diag session=%s signals=%s pane_tail=\n%s",
-                session_name,
-                signals,
-                pane_tail,
-            )
-            await self._send_modal_alert(
-                channel_key,
-                state,
-                prompt,
-                pane_pre_enter or pane_after,
-                reason="claude_modal_before_enter",
-            )
-            return False
-
-        return await self._send_enter_until_prompt_clears(
-            channel_key,
-            state,
-            prompt,
-            pane_before,
-            pane_pre_enter,
-        )
-
-    async def _send_enter_until_prompt_clears(
-        self,
-        channel_key: ChannelKey,
-        state: TmuxSessionState,
-        prompt: str,
-        pane_before: str,
-        pane_pre_enter: str,
-    ) -> bool:
-        """Press Enter until the accepted input bar clears or a real modal appears."""
-        session_name = state.session_name
-        pane_current = pane_pre_enter
-        for attempt in range(1, _ENTER_RETRY_LIMIT + 1):
-            if attempt > 1:
-                pane_before_retry = await capture_pane(session_name)
-                if not pane_before_retry:
-                    await self._send_modal_alert(
-                        channel_key,
-                        state,
-                        prompt,
-                        pane_current,
-                        reason="claude_enter_retry_capture_empty",
-                    )
-                    return False
-                if is_modal_present(pane_before_retry):
-                    await self._send_modal_alert(
-                        channel_key,
-                        state,
-                        prompt,
-                        pane_before_retry,
-                        reason="claude_modal_before_enter_retry",
-                    )
-                    return False
-                pane_current = pane_before_retry
-            try:
-                await send_enter(session_name)
-            except (OSError, subprocess.SubprocessError):
-                logger.warning("TUI_IO: send Enter failed session=%s", session_name)
-                await self._send_modal_alert(
-                    channel_key,
-                    state,
-                    prompt,
-                    pane_current,
-                    reason="claude_enter_send_error",
-                )
-                return False
-
-            await asyncio.sleep(_ENTER_RETRY_SETTLE_SEC)
-            pane_after_enter = await capture_pane(session_name)
-            if not pane_after_enter:
-                logger.warning("TUI_IO: send Enter capture failed session=%s", session_name)
-                await self._send_modal_alert(
-                    channel_key,
-                    state,
-                    prompt,
-                    pane_current,
-                    reason="claude_enter_capture_empty",
-                )
-                return False
-            if is_modal_present(pane_after_enter):
-                logger.info(
-                    "TUI_IO: send Enter opened modal session=%s attempt=%d",
-                    session_name,
-                    attempt,
-                )
-                await self._send_modal_alert(
-                    channel_key,
-                    state,
-                    prompt,
-                    pane_after_enter,
-                    reason="claude_modal_after_enter",
-                )
-                return False
-            if (
-                self._claude_queued_message_visible(pane_after_enter)
-                and not self._claude_queued_message_visible(pane_current)
-                and self._claude_queue_contains_prompt(pane_after_enter, prompt)
-            ):
-                logger.info(
-                    "TUI_IO: send Enter accepted into Claude queue session=%s attempt=%d",
-                    session_name,
-                    attempt,
-                )
-                return True
-            if not prompt_visible_in_pane(pane_before, pane_after_enter, prompt):
-                if attempt > 1:
-                    logger.info(
-                        "TUI_IO: send Enter accepted after retry session=%s attempt=%d",
-                        session_name,
-                        attempt,
-                    )
-                return True
-            if attempt < _ENTER_RETRY_LIMIT:
-                logger.info(
-                    "TUI_IO: send Enter did not submit session=%s attempt=%d; retrying",
-                    session_name,
-                    attempt,
-                )
-            pane_current = pane_after_enter
-
-        logger.warning(
-            "TUI_IO: send Enter exhausted retries session=%s attempts=%d",
-            session_name,
-            _ENTER_RETRY_LIMIT,
-        )
-        await self._send_modal_alert(
-            channel_key,
-            state,
-            prompt,
-            pane_current,
-            reason="claude_enter_did_not_clear_after_retries",
-        )
-        return False
 
     async def _safe_send_codex(
         self,

@@ -835,7 +835,7 @@ class NessyAdapter:
 
     def parse_tui_event(self, raw: str) -> TuiParseResult:
         """Parse Nessy TUI JSON event.
-        
+
         Nessy TUI transcript format:
         - type: "assistant" with message.parts[{text, thought?}]
         - type: "user" with message.parts[{text}]
@@ -846,7 +846,7 @@ class NessyAdapter:
             return TuiParseResult([])
 
         event_type = data.get("type")
-        
+
         if event_type == "session_meta":
             session_id = data.get("session_id")
             return TuiParseResult(
@@ -860,36 +860,36 @@ class NessyAdapter:
             parts = message.get("parts", [])
             texts = []
             tool_calls = []
-            
+
             for part in parts:
                 if not isinstance(part, dict):
                     continue
-                    
+
                 # Skip thought blocks (internal reasoning)
                 if part.get("thought"):
                     continue
-                    
+
                 # Extract text content
                 text = part.get("text", "")
                 if isinstance(text, str) and text:
                     texts.append(text)
-                
+
                 # Extract function calls (tool use requests)
                 if "functionCall" in part:
                     func_call = part["functionCall"]
                     tool_name = func_call.get("name", "")
                     if tool_name:
                         tool_calls.append(tool_name)
-            
+
             events = []
             # First send tool call status
             for tool_name in tool_calls:
                 events.append(StreamEvent("status", f"⏳ {tool_name}..."))
-            
+
             # Then send text content
             if texts:
                 events.append(StreamEvent("text", "\n".join(texts)))
-            
+
             return TuiParseResult(events) if events else TuiParseResult([])
 
         # Handle tool calls
@@ -902,7 +902,7 @@ class NessyAdapter:
             tool_call_result = data.get("toolCallResult", {})
             status = tool_call_result.get("status", "unknown")
             result_display = tool_call_result.get("resultDisplay", "")
-            
+
             # Extract tool name from function response
             message = data.get("message", {})
             parts = message.get("parts", [])
@@ -911,7 +911,7 @@ class NessyAdapter:
                 if isinstance(part, dict) and "functionResponse" in part:
                     tool_name = part["functionResponse"].get("name", "")
                     break
-            
+
             if tool_name:
                 status_emoji = "✅" if status == "success" else "❌"
                 status_text = f"{status_emoji} {tool_name}"
