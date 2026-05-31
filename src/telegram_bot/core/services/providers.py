@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from dataclasses import dataclass
@@ -23,6 +24,9 @@ from typing import Any, Literal, Protocol
 
 from telegram_bot.core.services.cc_events import StreamEvent, _tool_status
 from telegram_bot.core.services.codex_mcp import build_codex_mcp_config_args
+from telegram_bot.core.tui.modal_detect import is_modal_present as _claude_is_modal_present
+from telegram_bot.core.tui.paths import _SESSION_ID_RE
+from telegram_bot.core.tui.paths import transcript_path as _claude_transcript_path
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +145,16 @@ class ProviderAdapter(Protocol):
     def transcript_path_for_state(
         self, *, cwd: str, session_id: str, transcript_path: str | None
     ) -> Path | None: ...
+
+    def runner_version_tag(self) -> str: ...
+
+    def session_name_prefix(self) -> str: ...
+
+    def validate_session_id(self, session_id: str) -> bool: ...
+
+    def generates_own_session_id(self) -> bool: ...
+
+    def binary(self) -> str: ...
 
 
 def _load_json(raw: str) -> dict[str, Any] | None:
@@ -561,6 +575,204 @@ class CodexAdapter:
         )
         raise TimeoutError("Codex TUI transcript not found")
 
+    def runner_version_tag(self) -> str:
+        return "codex-tui-v1"
+
+    def session_name_prefix(self) -> str:
+        return "codex-"
+
+    def validate_session_id(self, session_id: str) -> bool:
+        # Codex uses UUIDv7, but we accept any valid UUID format
+        uuid_pattern = re.compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            re.IGNORECASE,
+        )
+        return bool(uuid_pattern.match(session_id))
+
+    def generates_own_session_id(self) -> bool:
+        return True
+
+
+class ClaudeAdapter:
+    """Provider adapter for Claude Code CLI.
+
+    Claude Code uses JSON stream output with --output-format stream-json.
+    Session management via --session-id (new) or --resume (existing).
+    """
+
+    name: Engine = "claude"
+
+    def binary(self) -> str:
+        """Return Claude CLI path."""
+        if found := shutil.which("claude"):
+            return str(found)
+        return "claude"
+
+    def build_tui_start(
+        self, *, cwd: str, model: str | None = None, mcp_config: str | None = None
+    ) -> list[str]:
+        """Build Claude TUI startup command for a new session.
+
+        Uses --session-id to pin the transcript to a specific UUID.
+        """
+        cmd = [
+            self.binary(),
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--permission-mode",
+            "bypassPermissions",
+            "--dangerously-skip-permissions",
+            "--teammate-mode",
+            "in-process",
+        ]
+        if mcp_config and Path(mcp_config).exists():
+            cmd.extend(["--mcp-config", mcp_config, "--strict-mcp-config"])
+        return cmd
+
+    def build_tui_resume(
+        self,
+        *,
+        cwd: str,
+        session_id: str,
+        model: str | None = None,
+        mcp_config: str | None = None,
+    ) -> list[str]:
+        """Build Claude TUI resume command for an existing session."""
+        cmd = [
+            self.binary(),
+            "--resume",
+            session_id,
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--permission-mode",
+            "bypassPermissions",
+            "--dangerously-skip-permissions",
+            "--teammate-mode",
+            "in-process",
+        ]
+        if mcp_config and Path(mcp_config).exists():
+            cmd.extend(["--mcp-config", mcp_config, "--strict-mcp-config"])
+        return cmd
+
+    def parse_tui_event(self, raw: str) -> TuiParseResult:
+        """Parse Claude TUI JSON event stream."""
+        data = _load_json(raw)
+        if data is None:
+            return TuiParseResult([])
+
+        event_type = data.get("type")
+
+        if event_type == "session_meta":
+            session_id = data.get("session_id")
+            return TuiParseResult(
+                [],
+                session_id=session_id if isinstance(session_id, str) else None,
+            )
+
+        # Handle assistant messages
+        if event_type == "assistant":
+            message = data.get("message", "")
+            if isinstance(message, str) and message:
+                return TuiParseResult([StreamEvent("text", message)])
+            return TuiParseResult([])
+
+        # Handle tool calls
+        if event_type == "tool_call":
+            tool_name = data.get("tool_name", "")
+            return TuiParseResult([StreamEvent("status", f"⏳ {tool_name}...")])
+
+        # Handle tool results
+        if event_type == "tool_result":
+            tool_call_result = data.get("toolCallResult", {})
+            status = tool_call_result.get("status", "unknown")
+            result_display = tool_call_result.get("resultDisplay", "")
+
+            message = data.get("message", {})
+            parts = message.get("parts", [])
+            tool_name = ""
+            for part in parts:
+                if isinstance(part, dict) and "functionResponse" in part:
+                    tool_name = part["functionResponse"].get("name", "")
+                    break
+
+            if tool_name:
+                status_emoji = "✅" if status == "success" else "❌"
+                status_text = f"{status_emoji} {tool_name}"
+                if result_display:
+                    display = (
+                        result_display[:200] + "..."
+                        if len(result_display) > 200
+                        else result_display
+                    )
+                    status_text = f"{status_emoji} {tool_name}: {display}"
+                return TuiParseResult([StreamEvent("status", status_text)])
+            return TuiParseResult([])
+
+        # Handle completion
+        if event_type == "session_end":
+            return TuiParseResult([StreamEvent("result", "")], done=True)
+
+        return TuiParseResult([])
+
+    def parse_exec_event(self, raw: str) -> ExecParseResult:
+        """Parse Claude subprocess JSON event."""
+        data = _load_json(raw)
+        if data is None:
+            return ExecParseResult([])
+
+        event_type = data.get("type")
+
+        if event_type == "session_started":
+            session_id = data.get("session_id")
+            return ExecParseResult([], session_id if isinstance(session_id, str) else None)
+
+        if event_type == "assistant_message":
+            content = data.get("content", "")
+            if isinstance(content, str) and content:
+                return ExecParseResult([StreamEvent("text", content)])
+
+        if event_type == "tool_call":
+            tool_name = data.get("tool_name", "")
+            return ExecParseResult([StreamEvent("status", f"⏳ {tool_name}...")])
+
+        if event_type == "session_end":
+            return ExecParseResult([StreamEvent("result", "")])
+
+        return ExecParseResult([])
+
+    def is_prompt_ready(self, pane: str) -> bool:
+        """Check if Claude TUI is ready for input."""
+        return "\u203a" in pane
+
+    def is_modal_present(self, pane: str) -> bool:
+        return _claude_is_modal_present(pane)
+
+    def transcript_path_for_state(
+        self, *, cwd: str, session_id: str, transcript_path: str | None
+    ) -> Path | None:
+        if transcript_path:
+            path = Path(transcript_path)
+            return path if path.exists() else None
+        path = _claude_transcript_path(cwd, session_id)
+        return path if path.exists() else None
+
+    def runner_version_tag(self) -> str:
+        return "claude-tui-v1"
+
+    def session_name_prefix(self) -> str:
+        return "cc-"
+
+    def validate_session_id(self, session_id: str) -> bool:
+        return bool(_SESSION_ID_RE.fullmatch(session_id))
+
+    def generates_own_session_id(self) -> bool:
+        return False
+
+
+CLAUDE_ADAPTER = ClaudeAdapter()
+
 
 CODEX_ADAPTER = CodexAdapter()
 
@@ -784,6 +996,23 @@ class NessyAdapter:
                 return path.resolve()
         return None
 
+    def runner_version_tag(self) -> str:
+        return "nessy-tui-v1"
+
+    def session_name_prefix(self) -> str:
+        return "nessy-"
+
+    def validate_session_id(self, session_id: str) -> bool:
+        # Nessy uses UUID4
+        uuid_pattern = re.compile(
+            r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            re.IGNORECASE,
+        )
+        return bool(uuid_pattern.match(session_id))
+
+    def generates_own_session_id(self) -> bool:
+        return True
+
 
 NESSY_ADAPTER = NessyAdapter()
 
@@ -801,15 +1030,23 @@ def is_engine_available(engine: str) -> bool:
 
 def choose_available_engine(preferred: str = "claude") -> Engine | None:
     """Pick an installed engine, preferring the requested one and then fallbacks.
-    
+
     Priority order: preferred -> claude -> codex -> nessy
     """
     if preferred in {"claude", "codex", "nessy"} and is_engine_available(preferred):
         return preferred  # type: ignore[return-value]
-    
+
     # Fallback chain: claude -> codex -> nessy
     for fallback in ["claude", "codex", "nessy"]:
         if fallback != preferred and is_engine_available(fallback):
             return fallback  # type: ignore[return-value]
-    
+
     return None
+
+
+# Provider registry mapping engine names to their adapters
+PROVIDER_REGISTRY: dict[Engine, ProviderAdapter] = {
+    "claude": CLAUDE_ADAPTER,
+    "codex": CODEX_ADAPTER,
+    "nessy": NESSY_ADAPTER,
+}
