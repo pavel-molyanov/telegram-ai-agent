@@ -2391,13 +2391,13 @@ class TmuxManager:
             event.set()
             await self._wait_for_tail_exit(channel_key)
 
+        state.mcp_config = self._ensure_runtime_mcp_config(
+            channel_key=channel_key,
+            base_mcp_config=state.base_mcp_config or state.mcp_config,
+            session_dir=Path(state.session_dir),
+            session_manager=session_manager,
+        )
         if state.provider == "codex":
-            state.mcp_config = self._ensure_runtime_mcp_config(
-                channel_key=channel_key,
-                base_mcp_config=state.base_mcp_config or state.mcp_config,
-                session_dir=Path(state.session_dir),
-                session_manager=session_manager,
-            )
             existing = set(Path.home().joinpath(".codex", "sessions").glob("**/*.jsonl"))
             since_wall = time.time()
             new_session_id = None
@@ -2408,13 +2408,16 @@ class TmuxManager:
             )
             state.session_id = None
             state.transcript_path = None
-        else:
-            state.mcp_config = self._ensure_runtime_mcp_config(
-                channel_key=channel_key,
-                base_mcp_config=state.base_mcp_config or state.mcp_config,
-                session_dir=Path(state.session_dir),
-                session_manager=session_manager,
+        elif state.provider == "nessy":
+            new_session_id = None
+            startup_cmd = NESSY_ADAPTER.build_tui_start(
+                cwd=state.cwd,
+                model=state.model,
+                mcp_config=state.mcp_config,
             )
+            state.session_id = None
+            state.transcript_path = None
+        else:
             new_session_id = generate_session_uuid()
             startup_cmd = session_manager.build_tmux_startup_args(  # type: ignore[attr-defined]
                 mode=state.mode,
@@ -2448,8 +2451,18 @@ class TmuxManager:
             raise
         if state.provider == "codex":
             self._codex_start_snapshots[channel_key] = (existing, since_wall)
+        elif state.provider == "nessy":
+            nessy_root = Path.home() / ".nessy" / "projects"
+            existing_nessy: set[Path] = set()
+            if nessy_root.exists():
+                for project_dir in nessy_root.iterdir():
+                    if project_dir.is_dir():
+                        chats_dir = project_dir / "chats"
+                        if chats_dir.exists():
+                            existing_nessy.update(chats_dir.glob("*.jsonl"))
+            self._nessy_start_snapshots[channel_key] = (existing_nessy, time.time())
         logger.info(
-            "Respawned tmux session %s with fresh CC session %s",
+            "Respawned tmux session %s with fresh session %s",
             state.session_name,
             new_session_id,
         )
@@ -2521,6 +2534,13 @@ class TmuxManager:
         )
         if state.provider == "codex":
             startup_cmd = CODEX_ADAPTER.build_tui_resume(
+                cwd=state.cwd,
+                session_id=new_session_id,
+                model=state.model,
+                mcp_config=state.mcp_config,
+            )
+        elif state.provider == "nessy":
+            startup_cmd = NESSY_ADAPTER.build_tui_resume(
                 cwd=state.cwd,
                 session_id=new_session_id,
                 model=state.model,

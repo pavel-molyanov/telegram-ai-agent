@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from telegram_bot.core.services.bot_mcp_runtime import ensure_bot_runtime_mcp_config
 from telegram_bot.core.services.claude import StreamEvent
-from telegram_bot.core.services.providers import CODEX_ADAPTER
+from telegram_bot.core.services.providers import CODEX_ADAPTER, NESSY_ADAPTER
 from telegram_bot.core.services.tmux_spawn import file_size, spawn_tmux_sync
 from telegram_bot.core.services.tmux_state import TmuxSessionState, _normalize_state_dict
 from telegram_bot.core.types import ChannelKey
@@ -95,6 +95,13 @@ def build_resume_startup_cmd(
             model=model,
             mcp_config=mcp_config,
         )
+    if provider == "nessy":
+        return NESSY_ADAPTER.build_tui_resume(
+            cwd=str(cwd),
+            session_id=session_id,
+            model=model,
+            mcp_config=mcp_config,
+        )
     return cast(
         list[str],
         session_manager.build_tmux_startup_args(  # type: ignore[attr-defined]
@@ -146,7 +153,8 @@ def restore_all(
 
             is_claude_tui = rv in {"tui-v1", "claude-tui-v1"} and state.provider == "claude"
             is_codex_tui = rv == "codex-tui-v1" and state.provider == "codex"
-            is_supported_tui = is_claude_tui or is_codex_tui
+            is_nessy_tui = rv == "nessy-tui-v1" and state.provider == "nessy"
+            is_supported_tui = is_claude_tui or is_codex_tui or is_nessy_tui
 
             if alive and is_supported_tui:
                 _ensure_runtime_mcp_config(
