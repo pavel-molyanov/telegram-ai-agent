@@ -122,14 +122,12 @@ from telegram_bot.core.services.topic_runtime import (
 )
 from telegram_bot.core.tui.capture import await_prompt_ready
 from telegram_bot.core.tui.modal_detect import (
-    DEFAULT_SETTLE_SEC,
     capture_pane,
     claude_input_bar_content,
     codex_input_bar_content,
     codex_prompt_visible_in_pane,
     is_modal_present,
     nessy_input_bar_content,
-    prompt_visible_in_pane,
 )
 from telegram_bot.core.tui.paths import generate_session_uuid, transcript_path
 from telegram_bot.core.tui.send_keys import (
@@ -409,20 +407,6 @@ class TmuxManager:
         """
         state = self._sessions.get(channel_key)
         return self.expected_epoch(state) if state else None
-
-    def get_provider_model(self, channel_key: ChannelKey) -> tuple[str | None, str | None]:
-        """Return (provider, model) for the live tmux session, or (None, None).
-
-        Authoritative source for ``record_message`` in the tmux flow: the
-        ``TmuxSessionState`` is set atomically by ``start_session`` /
-        ``switch_session`` to the engine that actually owns the pane, so it
-        cannot drift the way ``SessionManager._sessions[key].engine`` does
-        between an engine-switch and the next ``_get_session()`` call.
-        """
-        state = self._sessions.get(channel_key)
-        if state is None:
-            return None, None
-        return state.provider, state.model
 
     def get_session_snapshot(
         self, channel_key: ChannelKey
@@ -1417,19 +1401,6 @@ class TmuxManager:
         )
 
     @staticmethod
-    def _codex_pending_after_tool_call_visible(pane: str) -> bool:
-        normalized = " ".join(pane.casefold().split())
-        return (
-            "messages to be submitted after next tool call" in normalized
-            and "press esc to interrupt and send immediately" in normalized
-        )
-
-    @staticmethod
-    def _codex_queued_followup_visible(pane: str) -> bool:
-        normalized = " ".join(pane.casefold().split())
-        return "queued follow-up inputs" in normalized or "edit last queued message" in normalized
-
-    @staticmethod
     def _codex_pasted_content_visible(pane: str) -> bool:
         return "[pasted content" in pane.casefold()
 
@@ -1471,37 +1442,6 @@ class TmuxManager:
             for candidate in candidates
         )
 
-    @classmethod
-    def _codex_queue_contains_prompt(cls, pane: str, prompt: str) -> bool:
-        lines = pane.splitlines()
-        for idx, line in enumerate(lines):
-            line_norm = " ".join(line.casefold().split())
-            if (
-                "queued follow-up inputs" not in line_norm
-                and "messages to be submitted after next tool call" not in line_norm
-            ):
-                continue
-            window = "\n".join(lines[idx : idx + 24])
-            if cls._pane_contains_prompt_snippet(window, prompt):
-                return True
-        return False
-
-    @classmethod
-    def _claude_queue_contains_prompt(cls, pane: str, prompt: str) -> bool:
-        lines = pane.splitlines()
-        for idx, line in enumerate(lines):
-            if "press up to edit queued messages" not in " ".join(line.casefold().split()):
-                continue
-            window = "\n".join(lines[max(0, idx - 24) : idx + 1])
-            if cls._pane_contains_prompt_snippet(window, prompt):
-                return True
-        return False
-
-    @staticmethod
-    def _claude_queued_message_visible(pane: str) -> bool:
-        normalized = " ".join(pane.casefold().split())
-        return "press up to edit queued messages" in normalized
-
     async def send_direct(self, channel_key: ChannelKey, prompt: str) -> bool:
         """Deliver `prompt` to the tmux TUI, verifying the input actually
         landed before sending Enter. Returns True iff Enter was sent.
@@ -1539,29 +1479,6 @@ class TmuxManager:
         self._is_processing[channel_key] = True
         logger.info("TUI_IO: send_direct delivered session=%s", session_name)
         return True
-
-    async def _poll_pane_for_prompt(
-        self,
-        session_name: str,
-        pane_before: str,
-        prompt: str,
-    ) -> str:
-        """Wait for the prompt to appear in the pane, up to a budget.
-
-        Polls every `_POLL_STEP_SEC` (~50 ms) and returns as soon as the
-        diff check confirms visibility — fast path on idle CC. Budget is
-        `DEFAULT_SETTLE_SEC * 2.5` (~500 ms total) to stay resilient on
-        slow hosts without blocking the request path. Guaranteed to make
-        at least one capture attempt (do-while), so `DEFAULT_SETTLE_SEC=0`
-        in tests still exercises the verify path."""
-        deadline = asyncio.get_event_loop().time() + DEFAULT_SETTLE_SEC * 2.5
-        while True:
-            await asyncio.sleep(_POLL_STEP_SEC)
-            pane_after = await capture_pane(session_name)
-            if prompt_visible_in_pane(pane_before, pane_after, prompt):
-                return pane_after
-            if asyncio.get_event_loop().time() >= deadline:
-                return pane_after
 
     async def _post_engine_loading_message(
         self,
@@ -2622,19 +2539,6 @@ class TmuxManager:
         if not state.session_id:
             return None
         return transcript_path(state.cwd, state.session_id)
-
-    def _codex_transcript_for_state(self, channel_key: ChannelKey) -> Path | None:
-        state = self._sessions.get(channel_key)
-        if state is None or not state.session_id:
-            return None
-        path = CODEX_ADAPTER.transcript_path_for_state(
-            cwd=state.cwd,
-            session_id=state.session_id,
-            transcript_path=state.transcript_path,
-        )
-        if path is not None:
-            state.transcript_path = str(path)
-        return path
 
     @staticmethod
     def _find_codex_transcript(session_id: str, cwd: str) -> Path | None:

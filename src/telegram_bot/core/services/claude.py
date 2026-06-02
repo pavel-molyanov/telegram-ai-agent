@@ -1075,19 +1075,6 @@ class SessionManager:
             session.session_id = None  # Don't resume from failed session
             return t("ui.error_generic")
 
-    async def send(
-        self,
-        channel_key: ChannelKey,
-        prompt: str,
-    ) -> str:
-        """Send a prompt to CC and return the response text (non-streaming).
-
-        Uses the mode already set on the session (default: "free").
-
-        """
-        # Delegate to send_stream with a no-op callback
-        return await self.send_stream(channel_key, prompt, lambda _: None)
-
     async def cancel(self, channel_key: ChannelKey) -> bool:
         """Cancel a running CC process but preserve session_id for --resume.
 
@@ -1395,14 +1382,6 @@ class SessionManager:
             return False
         current = self._get_session(channel_key)
         return ref.provider != current.engine or ref.model != current.model
-
-    def is_cross_provider_reply(self, message_id: int, channel_key: ChannelKey) -> bool:
-        """True when message_id resolves in this channel but belongs to another provider."""
-        ref = self.resolve_reply_reference(message_id, channel_key)
-        if ref is None:
-            return False
-        current = self._get_session(channel_key)
-        return ref.provider != current.engine
 
     def load_mapping(self) -> None:
         """Load message→session mapping from JSON file.

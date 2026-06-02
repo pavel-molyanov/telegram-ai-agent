@@ -36,24 +36,6 @@ from __future__ import annotations
 import asyncio
 import re
 import subprocess
-from typing import TypedDict
-
-
-class ModalDiagSignals(TypedDict):
-    """Structured return of `collect_diagnostic_signals`. Each field
-    pinpoints one candidate cause of `BLOCKED reason=modal` rejection."""
-
-    len_pane_before: int
-    len_pane_after: int
-    pane_equal: bool
-    elapsed_ms: int | None
-    pane_width: int | None
-    has_input_bar_before: bool
-    has_input_bar_after: bool
-    gate_a_hit: bool
-    prompt_head_len: int
-    head_in_after_bar: bool
-
 
 # Head of the prompt to look for in the input bar. Long prompts get wrapped
 # across multiple bar lines, so we only need enough uniqueness to confirm
@@ -496,88 +478,6 @@ def _nessy_input_bar_content(pane: str) -> str | None:
 def nessy_input_bar_content(pane: str) -> str | None:
     """Return the current Nessy input-bar text, if one is visible."""
     return _nessy_input_bar_content(pane)
-
-
-def collect_diagnostic_signals(
-    pane_before: str,
-    pane_after: str,
-    prompt: str,
-    *,
-    elapsed_ms: int | None = None,
-    pane_width: int | None = None,
-) -> ModalDiagSignals:
-    """Structured signals for diagnosing `BLOCKED reason=modal` false
-    positives. Called from `tmux_manager.send_direct` when the verify
-    step fails.
-
-    Each field isolates one candidate cause so log triage can tell them
-    apart without attaching the full pane. Keep values JSON-safe so the
-    dict can be passed straight to `logger.debug(..., extra={...})`.
-
-    - `pane_equal` / `len_pane_after` — surfaces wedged tmux (capture
-      returned `""`) and "nothing rendered between baseline and verify".
-    - `elapsed_ms` — distinguishes "settle was too short for a long
-      wrapped prompt" from "real modal".
-    - `pane_width` — decorated `─═─═` separators on narrow terminals
-      defeat Gate B's `─{10,}` regex; pane width in the log lets the
-      operator see when that's the cause.
-    - `has_input_bar_before/after` — whether `_input_bar_content`
-      returns anything. `False` on both with a non-empty pane usually
-      means Gate B rejected a transient render.
-    - `gate_a_hit` — whether the capital-E footer regex matches. On a
-      real modal this is True; a False value on a BLOCKED path points
-      at Gate B as the rejecter.
-    - `head_in_after_bar` — final delivery check. False on BLOCKED is
-      expected; True with `gate_a_hit=False` would be a detector bug.
-    """
-    head = _prompt_head(prompt)
-    before_bar = _input_bar_content(pane_before)
-    after_bar = _input_bar_content(pane_after)
-
-    # Gate A slice here must agree with `is_modal_present` on the same
-    # pane — otherwise triage logs report gate_a_hit=False while the
-    # detector reports True on a padded pane. Both trim identically.
-    footer_lines = _strip_blank_tail(pane_after).splitlines()[-_MODAL_FOOTER_SCAN_LINES:]
-    footer = "\n".join(footer_lines)
-
-    # `head_in_after_bar` mirrors the runtime verdict's primary-path
-    # decision: normalized substring match plus scrollback subtraction.
-    # Without the subtraction, a pane carrying the head in both `before`
-    # and `after` (a lingering send from a prior round-trip) reports
-    # `head_in_after_bar=True` while `prompt_visible_in_pane` returns
-    # False — exactly the contradiction the diag field exists to avoid.
-    # Both values use the same `_ws_collapse` form so triage logs stay
-    # consistent across CC's input-bar transformations (2-space indent,
-    # word-wrap space→newline).
-    #
-    # Caveat: the placeholder-delivery path (`[Pasted text #N]` on
-    # ≥1500-char payloads) has verdict=True but `head_in_after_bar=False`
-    # by design — the head is genuinely absent from the bar. This is
-    # documented in `prompt_visible_in_pane`'s docstring and locked down
-    # by `test_head_in_after_bar_false_on_placeholder_delivery`.
-    head_norm = _ws_collapse(head)
-    after_norm = _ws_collapse(after_bar) if after_bar is not None else ""
-    before_norm = _ws_collapse(before_bar) if before_bar is not None else ""
-    head_in_after = bool(head_norm) and head_norm in after_norm
-    # Scrollback subtraction: if the same head was already present in
-    # `before_bar`, the "after" match is a carry-over, not a fresh
-    # delivery — matches the `return not (before_norm and head_norm in
-    # before_norm)` branch in `prompt_visible_in_pane`.
-    if head_in_after and before_norm and head_norm in before_norm:
-        head_in_after = False
-
-    return ModalDiagSignals(
-        len_pane_before=len(pane_before),
-        len_pane_after=len(pane_after),
-        pane_equal=pane_before == pane_after,
-        elapsed_ms=elapsed_ms,
-        pane_width=pane_width,
-        has_input_bar_before=before_bar is not None,
-        has_input_bar_after=after_bar is not None,
-        gate_a_hit=bool(_MODAL_FOOTER_TOKEN_RE.search(footer)),
-        prompt_head_len=len(head),
-        head_in_after_bar=head_in_after,
-    )
 
 
 async def capture_pane(session_name: str) -> str:

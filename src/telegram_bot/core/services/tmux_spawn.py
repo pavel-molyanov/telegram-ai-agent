@@ -15,7 +15,6 @@ manager facade keep their own `subprocess` import for patches that target
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import subprocess
 from pathlib import Path
@@ -75,35 +74,6 @@ def file_size(path: Path) -> int:
         return path.stat().st_size
     except FileNotFoundError:
         return 0
-
-
-async def query_pane_width(session_name: str) -> int | None:
-    """Return `tmux display-message -p '#{pane_width}'` as int, or None on
-    any subprocess failure. Invoked only when the modal-diag logger is
-    enabled, so the overhead is off the hot path in prod."""
-    try:
-        result = await asyncio.to_thread(
-            subprocess.run,
-            ["tmux", "display-message", "-p", "-t", f"={session_name}:", "#{pane_width}"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=2.0,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        logger.debug(
-            "tmux display-message pane_width rc=%d stderr=%r",
-            result.returncode,
-            (result.stderr or "")[:200],
-        )
-        return None
-    raw = (result.stdout or "").strip()
-    try:
-        return int(raw)
-    except ValueError:
-        return None
 
 
 def spawn_tmux_sync(

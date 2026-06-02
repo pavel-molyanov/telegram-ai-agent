@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Literal
 
 from telegram_bot.core.messages import t
@@ -128,22 +127,6 @@ def parse_jsonl_line(raw: str) -> ParsedEvent | None:
         return ParsedEvent(kind="skip", payload={"reason": "assistant_empty"})
 
     return ParsedEvent(kind="skip", payload={"reason": f"unknown:{etype}"})
-
-
-def tail_transcript(path: Path) -> list[ParsedEvent]:
-    """One-shot read of a transcript file → list of ParsedEvent.
-
-    Used in tests for deterministic assertions. The production tail is
-    incremental (offset-based), but reuses `parse_jsonl_line` per line.
-    """
-    if not path.exists():
-        return []
-    out: list[ParsedEvent] = []
-    for raw in path.read_text().splitlines():
-        parsed = parse_jsonl_line(raw)
-        if parsed is not None:
-            out.append(parsed)
-    return out
 
 
 def parse_transcript_event(

@@ -12,9 +12,6 @@ the input, ate the trailing Enter into their paste buffer, or required
 extra Tab/Enter dances. That caused production message loss in topic 9
 on 2026-04-26 — see tests/test_paste_buffer.py for the reproductions
 that pin the new contract.
-
-`plan_send_keys` and `SendKeysPlan` are kept as backward-compat re-exports
-for integration tests that import them via tui_helpers.
 """
 
 from __future__ import annotations
@@ -23,7 +20,6 @@ import asyncio
 import logging
 import subprocess
 import uuid
-from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -35,34 +31,7 @@ logger = logging.getLogger(__name__)
 # so the receiving end never reads it from the user payload.)
 _BRACKETED_PASTE_END = "\x1b[201~"
 
-# Legacy constants — kept so tests/integration/tui_helpers.py and the
-# existing smoke tests that read them keep importing cleanly. The
-# bracketed-paste path no longer applies char/newline thresholds.
 PASTE_MODE_CHAR_THRESHOLD = 800
-PASTE_MODE_NEWLINE_THRESHOLD = 2
-PASTE_MODE_SETTLE_MS = 500
-
-
-@dataclass(frozen=True)
-class SendKeysPlan:
-    """Backward-compat artefact of the send-keys -l era."""
-
-    literal_text: str
-    split_enter: bool
-    settle_ms: int
-
-
-def plan_send_keys(text: str) -> SendKeysPlan:
-    """Backward-compat: returns the legacy plan shape used by older
-    integration tests. New code goes through `send_paste`."""
-    has_newlines = text.count("\n") > PASTE_MODE_NEWLINE_THRESHOLD
-    long_text = len(text) > PASTE_MODE_CHAR_THRESHOLD
-    needs_settle = has_newlines or long_text
-    return SendKeysPlan(
-        literal_text=text,
-        split_enter=True,
-        settle_ms=PASTE_MODE_SETTLE_MS if needs_settle else 0,
-    )
 
 
 async def send_paste(session_name: str, text: str) -> None:
@@ -154,14 +123,6 @@ async def send_enter(session_name: str) -> None:
     await asyncio.to_thread(
         subprocess.run,
         ["tmux", "send-keys", "-t", f"={session_name}:", "Enter"],
-        check=True,
-    )
-
-
-async def send_tab(session_name: str) -> None:
-    await asyncio.to_thread(
-        subprocess.run,
-        ["tmux", "send-keys", "-t", f"={session_name}:", "Tab"],
         check=True,
     )
 
