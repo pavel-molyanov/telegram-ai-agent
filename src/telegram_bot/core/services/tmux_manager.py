@@ -190,11 +190,6 @@ _PROBE_INPUT_READY_BUDGET_SEC = 30.0
 _PROBE_INPUT_READY_RENDER_WAIT_SEC = 0.3
 _PROBE_INPUT_READY_RETRY_DELAY_SEC = 0.5
 
-_TRANSCRIPT_WATCHDOG_INTERVAL_SEC = 5.0
-_TRANSCRIPT_LAG_WARN_SEC = 10.0
-_TRANSCRIPT_LAG_RESTART_SEC = 30.0
-
-
 __all__ = [
     "SwitchResult",
     "TmuxManager",
@@ -276,10 +271,6 @@ class TmuxManager:
             check_channel=lambda key: self._check_channel_modal(key),
             channels_snapshot=lambda: list(self._sessions.keys()),
         )
-        self._transcript_watchdog_task: asyncio.Task[None] | None = None
-        self._transcript_lag_since: dict[ChannelKey, float] = {}
-        self._transcript_lag_warned: set[ChannelKey] = set()
-        self._transcript_last_offsets: dict[ChannelKey, int] = {}
 
     # --- Backwards-compatible accessors ---
 
@@ -1572,142 +1563,6 @@ class TmuxManager:
             logger.info("TUI_IO: modal watchdog skipped — no bot wired")
             return
         self._modal_watchdog.start(interval_sec)
-
-    async def stop_modal_watchdog(self) -> None:
-        """Cancel the watchdog task and await its exit. Safe to call in
-        teardown even if the task was never started."""
-        await self._modal_watchdog.stop()
-
-    def start_transcript_watchdog(
-        self,
-        *,
-        interval_sec: float = _TRANSCRIPT_WATCHDOG_INTERVAL_SEC,
-    ) -> None:
-        """Launch the JSONL tail-health watchdog.
-
-        Modal watchdog answers "is Codex waiting for a button?". This answers
-        the separate production failure mode: "Codex is appending to transcript
-        JSONL, but the bot's persisted offset is not moving". A stuck tail can
-        still be present in `_cancel_events`, so presence alone is not a
-        reliable health signal.
-        """
-        if self._transcript_watchdog_task is not None and not self._transcript_watchdog_task.done():
-            return
-        self._transcript_watchdog_task = asyncio.create_task(
-            self._transcript_watchdog_loop(interval_sec)
-        )
-
-    async def stop_transcript_watchdog(self) -> None:
-        task = self._transcript_watchdog_task
-        self._transcript_watchdog_task = None
-        if task is None:
-            return
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
-
-    async def _transcript_watchdog_loop(self, interval_sec: float) -> None:
-        with contextlib.suppress(asyncio.CancelledError):
-            while True:
-                await asyncio.sleep(interval_sec)
-                for channel_key in list(self._sessions.keys()):
-                    try:
-                        await self._check_transcript_tail_health(channel_key)
-                    except Exception:
-                        logger.warning(
-                            "Transcript watchdog probe failed for channel %s",
-                            channel_key,
-                            exc_info=True,
-                        )
-
-    async def _check_transcript_tail_health(
-        self,
-        channel_key: ChannelKey,
-        *,
-        now: float | None = None,
-        restart_after_sec: float = _TRANSCRIPT_LAG_RESTART_SEC,
-    ) -> None:
-        """Restart a stale transcript tail when JSONL grows but offset stalls."""
-        now = time.monotonic() if now is None else now
-        state = self._sessions.get(channel_key)
-        if state is None or not state.session_id:
-            self._clear_transcript_lag(channel_key)
-            return
-        if not self._tmux_alive(state.session_name):
-            self._clear_transcript_lag(channel_key)
-            return
-        output_path = self._transcript_path_for_state(state)
-        if output_path is None:
-            self._clear_transcript_lag(channel_key)
-            return
-
-        transcript_size = self._file_size(output_path)
-        lag_bytes = transcript_size - state.offset
-        if lag_bytes <= 0:
-            self._clear_transcript_lag(channel_key)
-            self._transcript_last_offsets[channel_key] = state.offset
-            return
-
-        previous_offset = self._transcript_last_offsets.get(channel_key)
-        self._transcript_last_offsets[channel_key] = state.offset
-        if previous_offset is None or previous_offset != state.offset:
-            self._transcript_lag_since[channel_key] = now
-            self._transcript_lag_warned.discard(channel_key)
-            return
-
-        lag_since = self._transcript_lag_since.setdefault(channel_key, now)
-        lag_age = now - lag_since
-        tail_active = channel_key in self._cancel_events
-        if lag_age >= _TRANSCRIPT_LAG_WARN_SEC and channel_key not in self._transcript_lag_warned:
-            logger.warning(
-                "Transcript tail lag channel=%s session=%s offset=%d file_size=%d "
-                "lag_bytes=%d lag_age=%.1fs tail_active=%s",
-                channel_key,
-                state.session_name,
-                state.offset,
-                transcript_size,
-                lag_bytes,
-                lag_age,
-                tail_active,
-            )
-            self._transcript_lag_warned.add(channel_key)
-
-        if lag_age < restart_after_sec:
-            return
-        if self._recovery_on_event_factory is None:
-            return
-
-        old_cancel = self._cancel_events.get(channel_key)
-        if old_cancel is not None:
-            old_cancel.set()
-            await self._wait_for_tail_exit(channel_key, timeout=2.5)
-            if self._cancel_events.get(channel_key) is old_cancel:
-                logger.warning(
-                    "Transcript watchdog replacing stale tail channel=%s session=%s: "
-                    "old tail did not exit before timeout",
-                    channel_key,
-                    state.session_name,
-                )
-
-        started = await self._start_recovery_tail(channel_key, state, output_path)
-        if started:
-            self._is_processing[channel_key] = True
-            self._transcript_lag_since[channel_key] = now
-            self._transcript_lag_warned.discard(channel_key)
-            logger.warning(
-                "Transcript watchdog restarted recovery tail channel=%s session=%s "
-                "offset=%d file_size=%d lag_bytes=%d",
-                channel_key,
-                state.session_name,
-                state.offset,
-                transcript_size,
-                lag_bytes,
-            )
-
-    def _clear_transcript_lag(self, channel_key: ChannelKey) -> None:
-        self._transcript_lag_since.pop(channel_key, None)
-        self._transcript_lag_warned.discard(channel_key)
-        self._transcript_last_offsets.pop(channel_key, None)
 
     async def _modal_watchdog_loop(self, interval_sec: float) -> None:
         """Legacy in-class loop, delegates to ModalWatchdog.

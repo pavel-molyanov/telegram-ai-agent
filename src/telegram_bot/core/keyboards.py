@@ -14,7 +14,6 @@ from telegram_bot.core.services.resume_listing import SessionEntry
 
 RESUME_PAGE_SIZE = 9
 _RESUME_BUTTONS_PER_ROW = 3
-_TELEGRAM_BUTTON_TEXT_LIMIT = 64
 
 
 def topic_keyboard() -> ReplyKeyboardMarkup:
@@ -185,9 +184,3 @@ def _format_age(mtime: float) -> str:
     if age < 86400:
         return f"{age // 3600}h"
     return f"{age // 86400}d"
-
-
-def _truncate_button_text(text: str) -> str:
-    if len(text) <= _TELEGRAM_BUTTON_TEXT_LIMIT:
-        return text
-    return text[: _TELEGRAM_BUTTON_TEXT_LIMIT - 1].rstrip() + "…"

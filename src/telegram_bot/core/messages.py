@@ -171,13 +171,10 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.btn_cancel": "Cancel ❌",
         "ui.btn_tui": "TUI 🖥",
         # --- CC content prefixes (injected into prompts) --------------
-        "cc.voice_label": "Voice",
-        "cc.videomessage_label": "Video message",
         "cc.voice_transcript_short": "[Voice, transcription]:",
         "cc.voice_failed_full": "[Voice message: failed to transcribe]",
         "cc.voice_too_large": "[Voice message: file too large]",
         "cc.voice_empty": "[Voice message: empty transcription]",
-        "cc.transcription_failed": "[{label}, not transcribed]",
         "cc.photo": "[Photo]",
         "cc.photo_with_caption": "[Photo with caption]: {caption}",
         "cc.photo_failed": "[Photo: failed to download]",
