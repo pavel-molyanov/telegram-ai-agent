@@ -1013,6 +1013,61 @@ class NessyAdapter:
     def generates_own_session_id(self) -> bool:
         return True
 
+    def transcript_snapshot(self) -> tuple[set[Path], float]:
+        """Snapshot existing Nessy transcripts and current wall time.
+
+        Helper for tmux_manager to capture a baseline before spawning,
+        so _locate_transcript_after_send can find the NEW session by
+        diffing against this snapshot.
+        """
+        nessy_root = Path.home() / ".nessy" / "projects"
+        existing: set[Path] = set()
+        if nessy_root.exists():
+            for project_dir in nessy_root.iterdir():
+                if project_dir.is_dir():
+                    chats_dir = project_dir / "chats"
+                    if chats_dir.exists():
+                        existing.update(chats_dir.glob("*.jsonl"))
+        return (existing, time.time())
+
+    async def locate_tui_transcript(
+        self,
+        *,
+        cwd: str,  # unused — Nessy finds transcripts by mtime, not cwd
+        existing: set[Path],
+        since_wall_time: float,
+        timeout_sec: float = 30.0,
+    ) -> TuiSessionInfo:
+        """Find a new Nessy TUI transcript after sending the first message.
+
+        Nessy writes transcripts to ~/.nessy/projects/<slug>/chats/<session-id>.jsonl.
+        The file is created only after Nessy processes the first user prompt,
+        so the retry loop waits up to ``timeout_sec`` for it to materialise.
+        """
+        nessy_root = Path.home() / ".nessy" / "projects"
+        if not nessy_root.exists():
+            raise RuntimeError("Nessy projects directory not found")
+
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            for project_dir in nessy_root.iterdir():
+                if not project_dir.is_dir():
+                    continue
+                chats_dir = project_dir / "chats"
+                if not chats_dir.exists():
+                    continue
+                for path in chats_dir.glob("*.jsonl"):
+                    if path in existing:
+                        continue
+                    if path.stat().st_mtime < since_wall_time:
+                        continue
+                    return TuiSessionInfo(path.stem, path.resolve())
+            await asyncio.sleep(0.2)
+
+        raise TimeoutError(
+            f"Nessy TUI transcript not materialised within {timeout_sec}s"
+        )
+
 
 NESSY_ADAPTER = NessyAdapter()
 

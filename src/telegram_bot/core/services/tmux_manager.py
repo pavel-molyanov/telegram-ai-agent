@@ -57,6 +57,8 @@ from telegram_bot.core.services.claude import Mode, StreamEvent
 from telegram_bot.core.services.providers import (
     CODEX_ADAPTER,
     NESSY_ADAPTER,
+    ProviderAdapter,
+    engine_display_name,
     get_adapter,
 )
 from telegram_bot.core.services.tail_runner import TailRunner
@@ -237,8 +239,7 @@ class TmuxManager:
         # poll-for-existence window inside the same 30s clock as readiness
         # (Decision 7). Cleared once the tail sees the file.
         self._spawn_deadlines: dict[ChannelKey, float] = {}
-        self._codex_start_snapshots: dict[ChannelKey, tuple[set[Path], float]] = {}
-        self._nessy_start_snapshots: dict[ChannelKey, tuple[set[Path], float]] = {}
+        self._tui_start_snapshots: dict[ChannelKey, tuple[set[Path], float]] = {}
         # Channels whose most recent _spawn_tmux passed prompt-readiness but
         # failed the input probe (probe budget elapsed without the test char
         # appearing in the input bar). Set by `_spawn_tmux`, consumed by
@@ -615,28 +616,19 @@ class TmuxManager:
                 loading_msg, t("ui.engine_ready", engine=provider)
             )
 
-        # The codex transcript discovery snapshot must be saved on BOTH
+        # The transcript discovery snapshot must be saved on BOTH
         # the happy path AND the probe-blocked path. After the user
         # dismisses the modal through /tui and sends their first real
-        # message, `_locate_codex_transcript_after_send` diffs the
+        # message, `_locate_transcript_after_send` diffs the
         # post-send jsonl listing against this snapshot to find the new
         # session_id. Without it, that lookup would scan an empty
         # baseline and pick up unrelated transcripts.
-        if provider == "codex" and resume_session_id is None:
-            self._codex_start_snapshots[channel_key] = (existing, since_wall)
-
-        # For Nessy, we also need to snapshot existing transcripts before spawn
-        # so _locate_nessy_transcript_after_send can find the NEW session.
-        if provider == "nessy" and resume_session_id is None:
-            nessy_root = Path.home() / ".nessy" / "projects"
-            existing_nessy: set[Path] = set()
-            if nessy_root.exists():
-                for project_dir in nessy_root.iterdir():
-                    if project_dir.is_dir():
-                        chats_dir = project_dir / "chats"
-                        if chats_dir.exists():
-                            existing_nessy.update(chats_dir.glob("*.jsonl"))
-            self._nessy_start_snapshots[channel_key] = (existing_nessy, time.time())
+        _adapter = get_adapter(provider)
+        if _adapter.generates_own_session_id() and resume_session_id is None:
+            if provider == "nessy":
+                self._tui_start_snapshots[channel_key] = NESSY_ADAPTER.transcript_snapshot()
+            else:
+                self._tui_start_snapshots[channel_key] = (existing, since_wall)
 
         self._sessions[channel_key] = state
         self._save_state()
@@ -1892,45 +1884,27 @@ class TmuxManager:
                     # _safe_send_and_enter posted an alert; do not start tail.
                     return ""
 
-                if state.provider == "codex" and not state.transcript_path:
+                adapter = get_adapter(state.provider)
+                if adapter.generates_own_session_id() and not state.transcript_path:
                     try:
-                        await self._locate_codex_transcript_after_send(channel_key, state)
+                        await self._locate_transcript_after_send(
+                            channel_key, state, adapter
+                        )
                     except RuntimeError:
                         logger.warning(
-                            "Codex TUI transcript discovery failed after delivery; "
+                            "%s TUI transcript discovery failed after delivery; "
                             "leaving session alive channel=%s session=%s",
+                            engine_display_name(state.provider),
                             channel_key,
                             state.session_name,
                             exc_info=True,
                         )
+                        verb = "принял" if state.provider == "codex" else "приняла"
+                        engine = engine_display_name(state.provider)
                         ret = on_event(
                             StreamEvent(
                                 "result_message",
-                                "Codex принял сообщение, но бот не смог найти transcript "
-                                "для стриминга ответа. Сессия оставлена живой; открой /tui "
-                                "или отправь следующее сообщение после завершения работы.",
-                            )
-                        )
-                        if asyncio.iscoroutine(ret):
-                            await ret
-                        await self.close_buffer(channel_key)
-                        return ""
-
-                if state.provider == "nessy" and not state.transcript_path:
-                    try:
-                        await self._locate_nessy_transcript_after_send(channel_key, state)
-                    except RuntimeError:
-                        logger.warning(
-                            "Nessy TUI transcript discovery failed after delivery; "
-                            "leaving session alive channel=%s session=%s",
-                            channel_key,
-                            state.session_name,
-                            exc_info=True,
-                        )
-                        ret = on_event(
-                            StreamEvent(
-                                "result_message",
-                                "Nessy приняла сообщение, но бот не смог найти transcript "
+                                f"{engine} {verb} сообщение, но бот не смог найти transcript "
                                 "для стриминга ответа. Сессия оставлена живой; открой /tui "
                                 "или отправь следующее сообщение после завершения работы.",
                             )
@@ -2100,18 +2074,12 @@ class TmuxManager:
             state.offset = 0
             self._save_state()
             raise
-        if state.provider == "codex":
-            self._codex_start_snapshots[channel_key] = (existing, since_wall)
-        elif state.provider == "nessy":
-            nessy_root = Path.home() / ".nessy" / "projects"
-            existing_nessy: set[Path] = set()
-            if nessy_root.exists():
-                for project_dir in nessy_root.iterdir():
-                    if project_dir.is_dir():
-                        chats_dir = project_dir / "chats"
-                        if chats_dir.exists():
-                            existing_nessy.update(chats_dir.glob("*.jsonl"))
-            self._nessy_start_snapshots[channel_key] = (existing_nessy, time.time())
+        adapter = get_adapter(state.provider)
+        if adapter.generates_own_session_id():
+            if state.provider == "nessy":
+                self._tui_start_snapshots[channel_key] = NESSY_ADAPTER.transcript_snapshot()
+            else:
+                self._tui_start_snapshots[channel_key] = (existing, since_wall)
         logger.info(
             "Respawned tmux session %s with fresh session %s",
             state.session_name,
@@ -2385,7 +2353,7 @@ class TmuxManager:
         # are intentionally stable so waiters cannot split across old/new locks.
         self._last_modal_pane.pop(channel_key, None)
         self._spawn_deadlines.pop(channel_key, None)
-        self._codex_start_snapshots.pop(channel_key, None)
+        self._tui_start_snapshots.pop(channel_key, None)
 
     async def _kill_tmux_only(self, channel_key: ChannelKey, state: TmuxSessionState) -> None:
         """Kill tmux process only; caller owns state lifecycle."""
@@ -2580,75 +2548,36 @@ class TmuxManager:
         """
         self._state_store.save(self._sessions)
 
-    async def _locate_codex_transcript_after_send(
-        self, channel_key: ChannelKey, state: TmuxSessionState
+    async def _locate_transcript_after_send(
+        self,
+        channel_key: ChannelKey,
+        state: TmuxSessionState,
+        adapter: ProviderAdapter,
     ) -> None:
-        existing, since_wall = self._codex_start_snapshots.get(channel_key, (set(), time.time()))
+        """Locate TUI transcript after sending the first message.
+
+        Uses the start snapshot to find NEW transcripts since session start.
+        Both Codex and Nessy generate their own session IDs and write
+        transcripts only after processing the first user prompt.
+        """
+        existing, since_wall = self._tui_start_snapshots.get(
+            channel_key, (set(), time.time())
+        )
         try:
-            info = await CODEX_ADAPTER.locate_tui_transcript(
+            info = await adapter.locate_tui_transcript(  # type: ignore[attr-defined]
                 cwd=state.cwd,
                 existing=existing,
                 since_wall_time=since_wall,
                 timeout_sec=30.0,
             )
         except Exception:
-            raise RuntimeError("Codex TUI transcript discovery failed") from None
+            raise RuntimeError(
+                f"{engine_display_name(state.provider)} TUI transcript discovery failed"
+            ) from None
         state.session_id = info.session_id
         state.transcript_path = str(info.transcript_path)
-        self._codex_start_snapshots.pop(channel_key, None)
+        self._tui_start_snapshots.pop(channel_key, None)
         self._save_state()
-
-    async def _locate_nessy_transcript_after_send(
-        self, channel_key: ChannelKey, state: TmuxSessionState
-    ) -> None:
-        """Locate Nessy TUI transcript after sending a message.
-
-        Nessy writes transcripts to ~/.nessy/projects/<slug>/chats/<session-id>.jsonl
-        Uses start snapshot to find NEW transcripts since session start.
-        Nessy does NOT have session_meta — sessionId is in every message;
-        the chat JSONL is created only after Nessy processes the first user
-        prompt, which adds ~100-500ms latency after tmux send-keys. The
-        retry loop mirrors `CodexAdapter.locate_tui_transcript` so the first
-        message in a fresh topic does not race-fail on a not-yet-written file.
-        """
-        snapshot = self._nessy_start_snapshots.get(channel_key, (set(), time.time()))
-        existing, since_wall = snapshot
-        nessy_root = Path.home() / ".nessy" / "projects"
-        if not nessy_root.exists():
-            raise RuntimeError("Nessy projects directory not found")
-
-        deadline = time.monotonic() + 30.0
-        while time.monotonic() < deadline:
-            found_path: Path | None = None
-            for project_dir in nessy_root.iterdir():
-                if not project_dir.is_dir():
-                    continue
-                chats_dir = project_dir / "chats"
-                if not chats_dir.exists():
-                    continue
-                for path in chats_dir.glob("*.jsonl"):
-                    if path in existing:
-                        continue
-                    if path.stat().st_mtime < since_wall:
-                        continue
-                    # Nessy: filename IS the session_id; no session_meta payload.
-                    found_path = path
-                    state.session_id = path.stem
-                    break
-                if found_path:
-                    break
-
-            if found_path is not None:
-                state.transcript_path = str(found_path.resolve())
-                self._nessy_start_snapshots.pop(channel_key, None)
-                self._save_state()
-                return
-
-            await asyncio.sleep(0.2)
-
-        raise RuntimeError(
-            f"Nessy TUI transcript not materialised within 30s for session {state.session_id}"
-        )
 
     def _transcript_path_for_state(self, state: TmuxSessionState) -> Path | None:
         if state.provider == "codex":
