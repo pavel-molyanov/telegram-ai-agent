@@ -41,6 +41,29 @@ READINESS_MARKERS = (
 
 _C0_STRIP_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _PROMPT_LINE_RE = re.compile(r"(?m)^[❯>]\s")
+# Box-drawing and separator characters: U+2500-U+259F plus common dash/hyphen
+_SEPARATOR_LINE_RE = re.compile(r"^[\u2500-\u259F\-]{41,}$")
+
+
+def clean_separator_lines(text: str) -> str:
+    """Truncate long separator lines consisting of box-drawing characters.
+    
+    For each line: if stripped line consists ONLY of box-drawing/separator
+    characters (Unicode range U+2500-U+259F and dash/hyphen) AND the stripped
+    line length > 40, truncate to 40 chars.
+    """
+    lines = text.splitlines(keepends=True)
+    cleaned: list[str] = []
+    for line in lines:
+        stripped = line.rstrip("\n\r")
+        if _SEPARATOR_LINE_RE.match(stripped):
+            # Preserve line ending
+            line_ending = line[len(stripped):]
+            cleaned.append(stripped[:40] + line_ending)
+        else:
+            cleaned.append(line)
+    return "".join(cleaned)
+
 
 _POLL_INTERVAL_SEC = 0.5
 _FALLBACK_POLL_BUDGET_SEC = 5.0
@@ -64,7 +87,8 @@ def escape_pane_for_html(pane_text: str) -> str:
     plus DEL `\\x7f` which Telegram rejects. `\\t` (0x09) and `\\n` (0x0a)
     are preserved.
     """
-    escaped = html.escape(pane_text, quote=False)
+    cleaned = clean_separator_lines(pane_text)
+    escaped = html.escape(cleaned, quote=False)
     return _C0_STRIP_RE.sub("", escaped)
 
 

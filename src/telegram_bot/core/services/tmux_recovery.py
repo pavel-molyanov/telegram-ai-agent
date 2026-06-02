@@ -46,6 +46,17 @@ def _state_transcript_path(state: TmuxSessionState) -> Path | None:
         if path is not None:
             state.transcript_path = str(path)
         return path
+    if state.provider == "nessy":
+        if not state.session_id:
+            return None
+        path = NESSY_ADAPTER.transcript_path_for_state(
+            cwd=state.cwd,
+            session_id=state.session_id,
+            transcript_path=state.transcript_path,
+        )
+        if path is not None:
+            state.transcript_path = str(path)
+        return path
     if not state.session_id:
         return None
     return _transcript_path(state.cwd, state.session_id)

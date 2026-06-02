@@ -93,16 +93,16 @@ def _list_codex_sessions(cwd: Path, home: Path) -> list[SessionEntry]:
 
 def _list_nessy_sessions(cwd: Path, home: Path) -> list[SessionEntry]:
     """List Nessy TUI sessions for a given cwd."""
-    root = home / ".nessy" / "sessions"
+    root = home / ".nessy" / "projects"
     if not root.exists():
         return []
     entries: list[SessionEntry] = []
-    for path in root.glob("**/*.jsonl"):
+    for path in root.glob("**/chats/*.jsonl"):
         meta = _nessy_meta(path)
         if meta is None:
             continue
         session_id, session_cwd = meta
-        if not _same_cwd(session_cwd, cwd):
+        if session_cwd and not _same_cwd(session_cwd, cwd):
             continue
         stat = _safe_stat(path)
         if stat is None:
@@ -120,18 +120,32 @@ def _list_nessy_sessions(cwd: Path, home: Path) -> list[SessionEntry]:
     return entries
 
 
-def _nessy_meta(path: Path, *, max_records: int = 3) -> tuple[str, str] | None:
-    """Extract session_id and cwd from Nessy transcript metadata."""
+def _nessy_meta(path: Path, *, max_records: int = 3) -> tuple[str, str]:
+    """Extract session_id and cwd from Nessy transcript metadata.
+    
+    Nessy chat JSONL filenames ARE the session_id (no session_meta in chat files).
+    Try to read first N lines looking for a dict with cwd key (maybe session_meta has it),
+    if not found — return (path.stem, '').
+    """
+    session_id = path.stem
+    cwd: str = ""
     for idx, data in enumerate(_iter_jsonl_soft(path)):
         if idx >= max_records:
-            return None
-        if not isinstance(data, dict) or data.get("type") != "session_meta":
+            break
+        if not isinstance(data, dict):
             continue
-        session_id = data.get("session_id")
-        cwd = data.get("cwd")
-        if isinstance(session_id, str) and isinstance(cwd, str):
-            return session_id, cwd
-    return None
+        # Try to extract cwd from session_meta or any dict with cwd key
+        if data.get("type") == "session_meta":
+            found_cwd = data.get("cwd")
+            if isinstance(found_cwd, str):
+                cwd = found_cwd
+                break
+        # Also check for cwd directly in any dict
+        found_cwd = data.get("cwd")
+        if isinstance(found_cwd, str):
+            cwd = found_cwd
+            break
+    return session_id, cwd
 
 
 def _preview_nessy(path: Path) -> str:
@@ -139,12 +153,12 @@ def _preview_nessy(path: Path) -> str:
     for data in _iter_jsonl_soft(path):
         if not isinstance(data, dict):
             continue
-        if data.get("type") == "user_message":
-            text = _extract_text(data.get("content") or data.get("message"))
+        if data.get("type") == "user":
+            text = _extract_nessy_text(data.get("message"))
             if _meaningful_preview(text):
                 return _truncate(text)
-        if data.get("type") == "assistant_message":
-            text = _extract_text(data.get("content") or data.get("message"))
+        if data.get("type") == "assistant":
+            text = _extract_nessy_text(data.get("message"))
             if _meaningful_preview(text):
                 return _truncate(text)
     return ""
@@ -237,8 +251,8 @@ def _last_nessy_assistant_message(path: Path) -> str | None:
     for data in _iter_jsonl_tail(path):
         if not isinstance(data, dict):
             continue
-        if data.get("type") == "assistant_message":
-            text = _extract_text(data.get("content") or data.get("message"))
+        if data.get("type") == "assistant":
+            text = _extract_nessy_text(data.get("message"))
             if text and text.strip():
                 return text.strip()
     return None
@@ -305,6 +319,37 @@ def _extract_text(value: object) -> str:
                 parts.append(item)
         return "\n".join(parts)
     return ""
+
+
+def _extract_nessy_text(value: object) -> str:
+    """Extract text from Nessy message format.
+    
+    Nessy TUI transcript format uses message.parts array with text/thought/tool_call blocks.
+    Skip thought blocks and tool calls, extract only text parts.
+    """
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, dict):
+        return ""
+    
+    parts = value.get("parts")
+    if not isinstance(parts, list):
+        return ""
+    
+    text_parts: list[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        # Skip thought blocks
+        if part.get("thought"):
+            continue
+        # Skip tool calls
+        if part.get("type") == "tool_call":
+            continue
+        if isinstance(part.get("text"), str):
+            text_parts.append(part["text"])
+    
+    return "\n".join(text_parts)
 
 
 def _meaningful_preview(text: str) -> bool:

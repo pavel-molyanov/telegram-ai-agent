@@ -214,7 +214,7 @@ async def _handle_tail_entry(
     )
 
     logger.info("TUI_IO: /tui session=%s", session_name)
-    sent = await message.answer(pane_html, parse_mode="HTML", reply_markup=keyboard)
+    sent = await message.reply(pane_html, parse_mode="HTML", reply_markup=keyboard)
     log_alert_audit(
         source=audit_source,
         reason=audit_reason,
@@ -299,8 +299,12 @@ async def handle_tail_callback(callback: CallbackQuery, tmux_manager: TmuxManage
     # no new alert fires. `edit_reply_markup(None)` could be used instead
     # as a soft undo, but the user prefers a clean chat.
     if action == "close":
+        trigger = message.reply_to_message
         with contextlib.suppress(Exception):
             await message.delete()
+        if trigger is not None:
+            with contextlib.suppress(Exception):
+                await trigger.delete()
         await callback.answer()
         return
 
