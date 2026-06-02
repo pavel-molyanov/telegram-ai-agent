@@ -1,7 +1,7 @@
 """Nessy-specific pane formatting for Telegram <pre> output.
 
 Applies in order:
-  1. Collapse box frames (╭──╮ / │ text │ / ╰──╯) into single ⚙️ lines.
+  1. Collapse box frames (╭──╮ / │ text │ / ╰──╯) into ⏺ ... header + indented lines.
   2. Strip the prompt placeholder ("Type your message...") from prompt lines.
   3. Delegate to capture.escape_pane_for_html for separator truncation,
      HTML escaping, and C0 control stripping.
@@ -20,11 +20,9 @@ _BOX_CONTENT_RE = re.compile(r"^│(.*)│$")
 # Strips grey placeholder text after the prompt character (U+276F or plain >)
 _PROMPT_PLACEHOLDER_RE = re.compile(r"([\u276f>])(\s+Type your message[^\n]*)")
 
-_MAX_BOX_CONTENT = 60  # max inner text chars before ellipsis
-
 
 def _collapse_boxes(text: str) -> str:
-    """Replace each ╭──╮ / │ text │ / ╰──╯ triplet with ⚙️ <content>."""
+    """Replace each ╭──╮ / │ text │ / ╰──╯ box with ⏺ ... header + indented content lines."""
     lines = text.splitlines(keepends=True)
     out: list[str] = []
     in_box = False
@@ -51,11 +49,12 @@ def _collapse_boxes(text: str) -> str:
                 box_contents.append(m.group(1).strip())
             elif _BOX_BOTTOM_RE.match(core):
                 in_box = False
-                content = " ".join(box_contents)
+                contents = box_contents[:]
                 box_contents = []
-                if len(content) > _MAX_BOX_CONTENT:
-                    content = content[: _MAX_BOX_CONTENT - 1] + "…"
-                out.append(box_leading + "⚙️ " + content + box_line_ending)
+                out.append(box_leading + "⏺ ..." + box_line_ending)
+                for c in contents:
+                    if c:
+                        out.append(box_leading + "  " + c + box_line_ending)
             else:
                 # Unexpected line inside box — flush as plain content
                 in_box = False
