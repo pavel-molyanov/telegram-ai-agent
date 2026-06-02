@@ -16,6 +16,7 @@ Message layout:
 from __future__ import annotations
 
 import html
+from collections.abc import Callable
 
 from aiogram.types import InlineKeyboardMarkup
 
@@ -50,7 +51,12 @@ def _format_prompt_preview(prompt: str) -> str:
     return html.escape(head + suffix, quote=False)
 
 
-def _format_pane_html(raw_pane: str, *, max_body_chars: int) -> str:
+def _format_pane_html(
+    raw_pane: str,
+    *,
+    max_body_chars: int,
+    format_fn: Callable[[str], str] = escape_pane_for_html,
+) -> str:
     """HTML-escape the pane and cap its body to `max_body_chars`. Caller
     is responsible for computing `max_body_chars` so the full assembled
     message stays under Telegram's 4096-char limit — see `_assemble`.
@@ -58,7 +64,7 @@ def _format_pane_html(raw_pane: str, *, max_body_chars: int) -> str:
     Truncation keeps the TAIL of the pane (`escaped[-n:]`) because the
     footer with the modal's dismiss options is the load-bearing context
     for the user; the older scrollback above is filler."""
-    escaped = escape_pane_for_html(raw_pane)
+    escaped = format_fn(raw_pane)
     if max_body_chars <= 0:
         # Header alone already ate the budget — return a minimal body so
         # the user still sees *something* identifying the pane state.
@@ -84,11 +90,13 @@ def _pane_budget_for(header: str) -> int:
     return max(0, min(budget, _PANE_MAX_CHARS_CEILING))
 
 
-def _assemble(header: str, pane: str) -> str:
+def _assemble(
+    header: str, pane: str, *, format_fn: Callable[[str], str] = escape_pane_for_html
+) -> str:
     """Compose `<header>\\n\\n<pre>{pane_body}</pre>` with the pane body
     shrunk to fit under Telegram's limit regardless of how long the
     header turned out to be (i18n variants, long prompt previews)."""
-    body = _format_pane_html(pane, max_body_chars=_pane_budget_for(header))
+    body = _format_pane_html(pane, max_body_chars=_pane_budget_for(header), format_fn=format_fn)
     return f"{header}\n\n{body}"
 
 
@@ -98,12 +106,13 @@ def render_modal_idle_alert(
     session_id: str,
     chat_id: int,
     thread_id: int | None,
+    format_fn: Callable[[str], str] = escape_pane_for_html,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build the alert shown when the watchdog finds a modal with no
     user message in flight. Same layout as `render_modal_alert` minus
     the prompt preview — there is no user prompt to echo back."""
     header = t("ui.modal_idle_detected")
-    text = _assemble(header, pane)
+    text = _assemble(header, pane, format_fn=format_fn)
     keyboard = build_tail_keyboard(
         session_id=session_id,
         chat_id=chat_id,
@@ -120,6 +129,7 @@ def render_modal_alert(
     session_id: str,
     chat_id: int,
     thread_id: int | None,
+    format_fn: Callable[[str], str] = escape_pane_for_html,
 ) -> tuple[str, InlineKeyboardMarkup]:
     """Build the alert payload.
 
@@ -129,12 +139,13 @@ def render_modal_alert(
       session_id: full UUID4 — its first 8 hex chars become the keyboard
         epoch so stale presses after a session swap are rejected.
       chat_id, thread_id: Telegram routing, pinned into callback_data.
+      format_fn: provider-specific pane formatter (default: shared escape).
 
     Returns:
       (html_text, keyboard) — ready for send_message(parse_mode="HTML").
     """
     header = t("ui.modal_blocked_header", prompt=_format_prompt_preview(prompt))
-    text = _assemble(header, pane)
+    text = _assemble(header, pane, format_fn=format_fn)
     keyboard = build_tail_keyboard(
         session_id=session_id,
         chat_id=chat_id,

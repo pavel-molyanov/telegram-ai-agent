@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 
 from aiogram.exceptions import TelegramAPIError
 
+from telegram_bot.core.services.providers import get_adapter
 from telegram_bot.core.tui.modal_alert import render_modal_alert, render_modal_idle_alert
 from telegram_bot.core.types import ChannelKey
 
@@ -203,6 +204,7 @@ async def send_modal_alert(
             session_id=epoch,
             chat_id=channel_key[0],
             thread_id=channel_key[1],
+            format_fn=get_adapter(state.provider).format_pane_html,
         )
         sent = await bot.send_message(  # type: ignore[attr-defined]
             chat_id=channel_key[0],
@@ -262,6 +264,7 @@ async def send_modal_idle_alert(
             session_id=epoch,
             chat_id=channel_key[0],
             thread_id=channel_key[1],
+            format_fn=get_adapter(state.provider).format_pane_html,
         )
         sent = await bot.send_message(  # type: ignore[attr-defined]
             chat_id=channel_key[0],

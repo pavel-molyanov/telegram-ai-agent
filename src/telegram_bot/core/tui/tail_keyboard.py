@@ -128,7 +128,7 @@ def build_tail_keyboard(
         InlineKeyboardButton(text="1", callback_data=cb("num1")),
         InlineKeyboardButton(text="2", callback_data=cb("num2")),
         InlineKeyboardButton(text="3", callback_data=cb("num3")),
-        InlineKeyboardButton(text="0", callback_data=cb("num0")),
+        InlineKeyboardButton(text="4", callback_data=cb("num4")),
     ]
 
     control_row = [

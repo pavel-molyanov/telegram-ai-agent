@@ -156,6 +156,8 @@ class ProviderAdapter(Protocol):
 
     def binary(self) -> str: ...
 
+    def format_pane_html(self, raw_pane: str) -> str: ...
+
 
 def _load_json(raw: str) -> dict[str, Any] | None:
     try:
@@ -592,6 +594,11 @@ class CodexAdapter:
     def generates_own_session_id(self) -> bool:
         return True
 
+    def format_pane_html(self, raw_pane: str) -> str:
+        from telegram_bot.core.tui.format_claude import format_pane_html as _fmt
+
+        return _fmt(raw_pane)
+
 
 class ClaudeAdapter:
     """Provider adapter for Claude Code CLI.
@@ -769,6 +776,11 @@ class ClaudeAdapter:
 
     def generates_own_session_id(self) -> bool:
         return False
+
+    def format_pane_html(self, raw_pane: str) -> str:
+        from telegram_bot.core.tui.format_claude import format_pane_html as _fmt
+
+        return _fmt(raw_pane)
 
 
 CLAUDE_ADAPTER = ClaudeAdapter()
@@ -1013,6 +1025,11 @@ class NessyAdapter:
     def generates_own_session_id(self) -> bool:
         return True
 
+    def format_pane_html(self, raw_pane: str) -> str:
+        from telegram_bot.core.tui.format_nessy import format_pane_html as _fmt
+
+        return _fmt(raw_pane)
+
     def transcript_snapshot(self) -> tuple[set[Path], float]:
         """Snapshot existing Nessy transcripts and current wall time.
 
@@ -1064,9 +1081,7 @@ class NessyAdapter:
                     return TuiSessionInfo(path.stem, path.resolve())
             await asyncio.sleep(0.2)
 
-        raise TimeoutError(
-            f"Nessy TUI transcript not materialised within {timeout_sec}s"
-        )
+        raise TimeoutError(f"Nessy TUI transcript not materialised within {timeout_sec}s")
 
 
 NESSY_ADAPTER = NessyAdapter()

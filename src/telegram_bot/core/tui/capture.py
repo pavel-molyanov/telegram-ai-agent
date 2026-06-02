@@ -41,25 +41,28 @@ READINESS_MARKERS = (
 
 _C0_STRIP_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _PROMPT_LINE_RE = re.compile(r"(?m)^[❯>]\s")
-# Box-drawing and separator characters: U+2500-U+259F plus common dash/hyphen
-_SEPARATOR_LINE_RE = re.compile(r"^[\u2500-\u259F\-]{41,}$")
+# Box-drawing separator characters: U+2500-U+259F plus common dash/hyphen.
+# Lines longer than 20 chars are truncated; box-frame collapsing is in format_nessy.py.
+_SEPARATOR_LINE_RE = re.compile(r"^[\u2500-\u259F\-]{21,}$")
+_MAX_SEP_WIDTH = 20
 
 
 def clean_separator_lines(text: str) -> str:
-    """Truncate long separator lines consisting of box-drawing characters.
-    
-    For each line: if stripped line consists ONLY of box-drawing/separator
-    characters (Unicode range U+2500-U+259F and dash/hyphen) AND the stripped
-    line length > 40, truncate to 40 chars.
+    """Truncate long pure separator lines to 20 chars.
+
+    Handles leading whitespace (tmux padding). Box frame collapsing
+    (\u256d\u2500\u2500\u256e / \u2502 text \u2502 / \u2570\u2500\u2500\u256f) is
+    provider-specific \u2014 see format_nessy.py.
     """
     lines = text.splitlines(keepends=True)
     cleaned: list[str] = []
     for line in lines:
         stripped = line.rstrip("\n\r")
-        if _SEPARATOR_LINE_RE.match(stripped):
-            # Preserve line ending
-            line_ending = line[len(stripped):]
-            cleaned.append(stripped[:40] + line_ending)
+        line_ending = line[len(stripped) :]
+        core = stripped.strip()
+        leading = stripped[: len(stripped) - len(stripped.lstrip())]
+        if _SEPARATOR_LINE_RE.match(core):
+            cleaned.append(leading + core[:_MAX_SEP_WIDTH] + line_ending)
         else:
             cleaned.append(line)
     return "".join(cleaned)
@@ -139,13 +142,14 @@ async def await_prompt_ready(
     is ~5s even if `timeout` is smaller.
     """
     import logging
+
     logger = logging.getLogger(__name__)
-    
+
     clock = clock or time.monotonic
     deadline = clock() + timeout
     trust_handled = False
     pane = ""  # captured in loop; initialized so the timeout log never UnboundLocalError.
-    
+
     poll_count = 0
     while clock() < deadline:
         poll_count += 1
@@ -161,11 +165,10 @@ async def await_prompt_ready(
                 )
         except subprocess.CalledProcessError as e:
             logger.warning(
-                "TUI_IO: capture-pane CalledProcessError poll=%d session=%s returncode=%d stderr=%r",
+                "TUI_IO: capture-pane CalledProcessError poll=%d session=%s returncode=%d",
                 poll_count,
                 session_name,
                 e.returncode,
-                e.stderr[:200] if e.stderr else "",
             )
             return False
 

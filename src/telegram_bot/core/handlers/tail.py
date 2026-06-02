@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import logging
 import subprocess
+from collections.abc import Callable
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -31,6 +32,7 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
 from telegram_bot.core.messages import t
+from telegram_bot.core.services.providers import get_adapter
 from telegram_bot.core.services.tmux_manager import TmuxManager
 from telegram_bot.core.services.tmux_modal_watchdog import (
     AUDIT_SOURCE_TUI_BUTTON,
@@ -116,14 +118,17 @@ def _send_keys_cmd(session_name: str, keys: list[str]) -> list[str]:
     return ["tmux", "send-keys", "-t", f"={session_name}:", *keys]
 
 
-def _format_pane_html(raw_pane: str) -> str:
+def _format_pane_html(
+    raw_pane: str,
+    format_fn: Callable[[str], str] = escape_pane_for_html,
+) -> str:
     """HTML-escape a pane snapshot and cap it at `_PANE_MAX_CHARS`.
 
     Truncates by keeping the tail (last lines of the scrollback are the
     freshest TUI state) and prefixes with a `(truncated)` marker so the user
     knows content was dropped.
     """
-    escaped = escape_pane_for_html(raw_pane)
+    escaped = format_fn(raw_pane)
     if len(escaped) > _PANE_MAX_CHARS:
         escaped = _TRUNCATION_PREFIX + escaped[-_PANE_MAX_CHARS:]
     return f"<pre>{escaped}</pre>"
@@ -206,7 +211,9 @@ async def _handle_tail_entry(
         return
 
     raw_pane = result.stdout or ""
-    pane_html = _format_pane_html(raw_pane)
+    _, provider, _ = tmux_manager.get_session_snapshot(key) or (None, "claude", None)
+    fmt = get_adapter(provider or "claude").format_pane_html
+    pane_html = _format_pane_html(raw_pane, format_fn=fmt)
     keyboard = build_tail_keyboard(
         session_id=epoch,
         chat_id=message.chat.id,
@@ -289,6 +296,8 @@ async def handle_tail_callback(callback: CallbackQuery, tmux_manager: TmuxManage
         return
 
     action = parsed.action
+    _, provider, _ = tmux_manager.get_session_snapshot(key) or (None, "claude", None)
+    fmt = get_adapter(provider or "claude").format_pane_html
 
     # close: delete the whole /tui post (snapshot + keyboard), no send-keys.
     # The prior behaviour was to drop only the reply markup and leave the
@@ -299,12 +308,8 @@ async def handle_tail_callback(callback: CallbackQuery, tmux_manager: TmuxManage
     # no new alert fires. `edit_reply_markup(None)` could be used instead
     # as a soft undo, but the user prefers a clean chat.
     if action == "close":
-        trigger = message.reply_to_message
         with contextlib.suppress(Exception):
             await message.delete()
-        if trigger is not None:
-            with contextlib.suppress(Exception):
-                await trigger.delete()
         await callback.answer()
         return
 
@@ -318,6 +323,7 @@ async def handle_tail_callback(callback: CallbackQuery, tmux_manager: TmuxManage
             chat_id=parsed.chat_id,
             thread_id=parsed.thread_id,
             kind=parsed.kind,
+            format_fn=fmt,
         )
         logger.info("TUI_IO: /tui callback action=refresh session=%s", session_name)
         await callback.answer()
@@ -352,6 +358,7 @@ async def handle_tail_callback(callback: CallbackQuery, tmux_manager: TmuxManage
         chat_id=parsed.chat_id,
         thread_id=parsed.thread_id,
         kind=parsed.kind,
+        format_fn=fmt,
     )
     if action in _RECOVERY_TAIL_ACTIONS:
         await tmux_manager.ensure_recovery_tail(key)
@@ -368,6 +375,7 @@ async def _rerender(
     chat_id: int,
     thread_id: int | None,
     kind: str = KIND_PANEL,
+    format_fn: Callable[[str], str] = escape_pane_for_html,
 ) -> None:
     """Capture the pane and edit the /tui message in place.
 
@@ -411,9 +419,10 @@ async def _rerender(
             session_id=epoch,
             chat_id=chat_id,
             thread_id=thread_id,
+            format_fn=format_fn,
         )
     else:
-        text = _format_pane_html(raw_pane)
+        text = _format_pane_html(raw_pane, format_fn=format_fn)
         keyboard = build_tail_keyboard(
             session_id=epoch,
             chat_id=chat_id,

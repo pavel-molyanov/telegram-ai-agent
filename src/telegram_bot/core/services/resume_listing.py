@@ -122,7 +122,7 @@ def _list_nessy_sessions(cwd: Path, home: Path) -> list[SessionEntry]:
 
 def _nessy_meta(path: Path, *, max_records: int = 3) -> tuple[str, str]:
     """Extract session_id and cwd from Nessy transcript metadata.
-    
+
     Nessy chat JSONL filenames ARE the session_id (no session_meta in chat files).
     Try to read first N lines looking for a dict with cwd key (maybe session_meta has it),
     if not found — return (path.stem, '').
@@ -323,7 +323,7 @@ def _extract_text(value: object) -> str:
 
 def _extract_nessy_text(value: object) -> str:
     """Extract text from Nessy message format.
-    
+
     Nessy TUI transcript format uses message.parts array with text/thought/tool_call blocks.
     Skip thought blocks and tool calls, extract only text parts.
     """
@@ -331,11 +331,11 @@ def _extract_nessy_text(value: object) -> str:
         return value
     if not isinstance(value, dict):
         return ""
-    
+
     parts = value.get("parts")
     if not isinstance(parts, list):
         return ""
-    
+
     text_parts: list[str] = []
     for part in parts:
         if not isinstance(part, dict):
@@ -348,7 +348,7 @@ def _extract_nessy_text(value: object) -> str:
             continue
         if isinstance(part.get("text"), str):
             text_parts.append(part["text"])
-    
+
     return "\n".join(text_parts)
 
 
