@@ -275,6 +275,20 @@ async def handle_kill(message: Message, tmux_manager: TmuxManager) -> None:
     await message.answer(t("ui.tmux_killed"))
 
 
+@router.message(Command("reconnect"))
+async def handle_reconnect(message: Message, tmux_manager: TmuxManager) -> None:
+    """Restart the transcript tail without touching the tmux session or Claude context."""
+    key = channel_key(message)
+    if not tmux_manager.is_active(key):
+        await message.answer(t("ui.tmux_not_active"))
+        return
+    started = await tmux_manager.reconnect_tail(key)
+    if started:
+        await message.answer(t("ui.reconnect_started"))
+    else:
+        await message.answer(t("ui.reconnect_no_transcript"))
+
+
 @router.message(Command("resume"))
 async def handle_resume(
     message: Message,

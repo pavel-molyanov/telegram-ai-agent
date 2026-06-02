@@ -1887,9 +1887,7 @@ class TmuxManager:
                 adapter = get_adapter(state.provider)
                 if adapter.generates_own_session_id() and not state.transcript_path:
                     try:
-                        await self._locate_transcript_after_send(
-                            channel_key, state, adapter
-                        )
+                        await self._locate_transcript_after_send(channel_key, state, adapter)
                     except RuntimeError:
                         logger.warning(
                             "%s TUI transcript discovery failed after delivery; "
@@ -1971,6 +1969,41 @@ class TmuxManager:
 
         # Offset is maintained incrementally by _tail_until_done — no
         # post-cancel recompute needed.
+
+    async def reconnect_tail(self, channel_key: ChannelKey) -> bool:
+        """Cancel any stuck tail and restart streaming from the current offset.
+
+        Does NOT touch the tmux session or Claude's context — only restarts
+        the Python-side transcript reader. Returns True if a new tail was
+        started, False if there is no active session or no transcript.
+        """
+        state = self._sessions.get(channel_key)
+        if state is None:
+            return False
+
+        # Cancel stuck tail without sending Escape to Claude.
+        await self.close_buffer(channel_key)
+        event = self._cancel_events.get(channel_key)
+        if event:
+            event.set()
+        self._is_processing.pop(channel_key, None)
+        await self._wait_for_tail_exit(channel_key, timeout=1.0)
+
+        output_path = self._transcript_path_for_state(state)
+        if output_path is None or not output_path.exists():
+            return False
+
+        started = await self._start_recovery_tail(
+            channel_key, state, output_path, reason="reconnect"
+        )
+        if started:
+            logger.info(
+                "TUI_IO: reconnect_tail started channel=%s session=%s offset=%d",
+                channel_key,
+                state.session_name,
+                state.offset,
+            )
+        return started
 
     async def _wait_for_tail_exit(self, channel_key: ChannelKey, timeout: float = 2.5) -> None:
         """Busy-wait up to `timeout` seconds for the tail's finally block
@@ -2560,9 +2593,7 @@ class TmuxManager:
         Both Codex and Nessy generate their own session IDs and write
         transcripts only after processing the first user prompt.
         """
-        existing, since_wall = self._tui_start_snapshots.get(
-            channel_key, (set(), time.time())
-        )
+        existing, since_wall = self._tui_start_snapshots.get(channel_key, (set(), time.time()))
         try:
             info = await adapter.locate_tui_transcript(  # type: ignore[attr-defined]
                 cwd=state.cwd,

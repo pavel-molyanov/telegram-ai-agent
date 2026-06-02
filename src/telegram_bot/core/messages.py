@@ -47,6 +47,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.tmux_failed": "❌ Failed to start tmux: {exc}",
         "ui.tmux_killed": "🗑 Tmux session killed",
         "ui.tmux_not_active": "No active tmux session in this topic",
+        "ui.reconnect_started": "🔄 Tail reconnected — streaming resumed.",
+        "ui.reconnect_no_transcript": "⚠️ Session active but no transcript found. Try /clear.",
         "ui.engine_starting": (
             "🔄 {engine} is starting up — please wait a few seconds before sending."
         ),
@@ -276,6 +278,8 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.tmux_failed": "❌ Не удалось запустить tmux: {exc}",
         "ui.tmux_killed": "🗑 Tmux-сессия убита",
         "ui.tmux_not_active": "В этом топике нет активной tmux-сессии",
+        "ui.reconnect_started": "🔄 Tail переподключён — стриминг возобновлён.",
+        "ui.reconnect_no_transcript": "⚠️ Сессия активна, но transcript не найден. Попробуй /clear.",
         "ui.engine_starting": (
             "🔄 {engine} запускается — подожди несколько секунд перед отправкой."
         ),

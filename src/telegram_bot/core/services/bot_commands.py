@@ -42,6 +42,11 @@ PUBLIC_BOT_COMMANDS: tuple[LocalizedBotCommand, ...] = (
     LocalizedBotCommand("engine", "Выбрать Claude Code или Codex", "Choose Claude Code or Codex"),
     LocalizedBotCommand("resume", "Возобновить сохраненную сессию", "Resume a saved session"),
     LocalizedBotCommand("kill", "Остановить tmux-сессию", "Stop the tmux session"),
+    LocalizedBotCommand(
+        "reconnect",
+        "Переподключить tail",
+        "Reconnect tail without resetting session",
+    ),
     LocalizedBotCommand("tui", "Открыть панель TUI", "Open the TUI panel"),
     LocalizedBotCommand(
         "tail",
