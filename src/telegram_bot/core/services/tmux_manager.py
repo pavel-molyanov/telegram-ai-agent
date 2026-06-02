@@ -219,11 +219,8 @@ class TmuxManager:
     def __init__(
         self,
         sessions_dir: Path,
-        *,
-        session_name_prefix: str = "cc-",
     ) -> None:
         self._sessions_dir = sessions_dir
-        self._session_name_prefix = session_name_prefix
         self._sessions: dict[ChannelKey, TmuxSessionState] = {}
         self._cancel_events: dict[ChannelKey, asyncio.Event] = {}
         self._is_processing: dict[ChannelKey, bool] = {}
@@ -292,11 +289,6 @@ class TmuxManager:
     @_modal_watchdog_task.setter
     def _modal_watchdog_task(self, value: asyncio.Task[None] | None) -> None:
         self._modal_watchdog._task = value
-
-    @property
-    def _send_locks(self) -> dict[ChannelKey, asyncio.Lock]:
-        """Compatibility alias for older tests; use _channel_locks in code."""
-        return self._channel_locks
 
     def wire_live_buffer(self, *, bot: object, topic_config: object) -> None:
         """Attach the services needed to materialize LiveStatusBuffers.
@@ -1413,23 +1405,6 @@ class TmuxManager:
             candidates.append(normalized[-32:])
         return any(
             candidate and (candidate in bar_normalized or candidate in bar_hyphen_compact)
-            for candidate in candidates
-        )
-
-    @staticmethod
-    def _pane_contains_prompt_snippet(pane: str, prompt: str) -> bool:
-        if not pane or not prompt.strip():
-            return False
-        normalized = " ".join(prompt.split())
-        pane_normalized = " ".join(pane.split())
-        pane_hyphen_compact = re.sub(r"-\s+", "-", pane_normalized)
-        candidates = [normalized]
-        if len(normalized) > 48:
-            candidates.append(normalized[:48])
-        if len(normalized) > 32:
-            candidates.append(normalized[-32:])
-        return any(
-            candidate and (candidate in pane_normalized or candidate in pane_hyphen_compact)
             for candidate in candidates
         )
 

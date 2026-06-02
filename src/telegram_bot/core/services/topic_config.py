@@ -102,9 +102,8 @@ class TopicConfig:
     Provides per-topic settings and notification routing.
     """
 
-    def __init__(self, config_path: str, project_root: str) -> None:
+    def __init__(self, config_path: str) -> None:
         self._config_path = config_path
-        self._project_root = project_root
         # Nanosecond mtime — coarse-grained st_mtime collapses two writes inside
         # the same second, leaving the cache stale.
         self._last_mtime: int = 0
@@ -300,11 +299,6 @@ class TopicConfig:
             return _default_topic()
         return self._topics.get(thread_id, _default_topic())
 
-    def get_routing(self, notification_type: str) -> int | None:
-        """Return thread_id for a notification type, or None if not configured."""
-        self._maybe_reload()
-        return self._routing.get(notification_type)
-
     async def _update_topic_field(
         self, *, thread_id: int, field_name: str, value: object, log_label: str
     ) -> bool:
@@ -426,31 +420,6 @@ class TopicConfig:
             field_name="exec_mode",
             value=mode,
             log_label="update_exec_mode",
-        )
-
-    async def update_engine(self, thread_id: int, engine: Engine) -> bool:
-        """Persist a new engine for one topic. Returns False on bad input."""
-        if engine not in _VALID_ENGINES:
-            logger.warning("update_engine: invalid engine %r", engine)
-            return False
-        return await self._update_topic_field(
-            thread_id=thread_id,
-            field_name="engine",
-            value=engine,
-            log_label="update_engine",
-        )
-
-    async def update_model(self, thread_id: int, model: str | None) -> bool:
-        """Persist model for one topic. None is written as JSON null."""
-        normalized = _normalize_model(model)
-        if isinstance(model, str) and model.strip() and normalized is None:
-            logger.warning("update_model: invalid model %r", model)
-            return False
-        return await self._update_topic_field(
-            thread_id=thread_id,
-            field_name="model",
-            value=normalized,
-            log_label="update_model",
         )
 
     async def update_engine_model(self, thread_id: int, engine: Engine, model: str | None) -> bool:

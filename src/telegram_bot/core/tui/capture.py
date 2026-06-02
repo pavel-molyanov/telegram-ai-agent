@@ -29,16 +29,6 @@ TRUST_DIALOG_SUBSTRINGS = (
     "Do you trust the contents of this directory",  # Codex / older CC, fallback
 )
 
-# Prompt-ready markers in CC TUI:
-#   "❯ " — idle prompt, ready for input
-#   "start a new conversation" — welcome screen
-#   "/help" — mentioned in the welcome shortcut list
-READINESS_MARKERS = (
-    "❯",
-    "start a new conversation",
-    "/help",
-)
-
 _C0_STRIP_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _PROMPT_LINE_RE = re.compile(r"(?m)^[❯>]\s")
 # Box-drawing separator characters: U+2500-U+259F plus common dash/hyphen.

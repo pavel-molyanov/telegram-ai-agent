@@ -162,51 +162,7 @@ class SessionManager:
         # Channels where next message should ignore reply-to-resume (set after kill/reset)
         self._fresh_channels: set[str] = set()
         # Copy of the module-level _MODE_TOOLS so instance-scoped extensions
-        # (extend_mode_tools) don't leak into other SessionManager instances.
         self._mode_tools: dict[str, str] = dict(_MODE_TOOLS)
-
-    def extend_mode_tools(self, extensions: dict[str, list[str]]) -> None:
-        """Append tool names to the allowedTools list of one or more modes.
-
-        Used by private bot entry points to attach assistant-specific MCP
-        tools that must not live in the public core.
-        """
-        for mode, tools in extensions.items():
-            if mode not in self._mode_tools:
-                raise ValueError(f"Unknown mode: {mode!r}")
-            if not tools:
-                continue
-            current = self._mode_tools[mode]
-            addition = ",".join(tools)
-            self._mode_tools[mode] = f"{current},{addition}" if current else addition
-
-    @staticmethod
-    def extend_tool_status_map(extensions: dict[str, str]) -> None:
-        """Register extra tool → status labels.
-
-        Overwrites existing keys, so callers can override core defaults.
-        Module-level state lives in `cc_events` — this wrapper mutates
-        that registry so `_tool_status_map()` picks up the extensions.
-        """
-        _cc_events._EXTRA_TOOL_STATUS.update(extensions)
-
-    @staticmethod
-    def extend_file_path_rules(rules: list[tuple[str, str, str]]) -> None:
-        """Register extra (path_substring, read_status, write_status) rules.
-
-        Appended after the core generic rules — first match wins, so core
-        patterns (memory/, .claude/skills/) still take precedence.
-        """
-        _cc_events._EXTRA_FILE_PATH_RULES.extend(rules)
-
-    @staticmethod
-    def extend_bash_rules(rules: list[tuple[str, str]]) -> None:
-        """Register extra (bash_substring, status) rules.
-
-        Prepended before core rules so private substrings win over generic
-        ones before generic rules such as raw `git`.
-        """
-        _cc_events._EXTRA_BASH_RULES.extend(rules)
 
     @property
     def file_cache_dir(self) -> str:

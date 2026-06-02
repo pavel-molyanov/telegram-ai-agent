@@ -98,7 +98,7 @@ async def _start() -> None:
     except Exception:
         logger.warning("Failed to set Telegram bot commands", exc_info=True)
 
-    topic_config = TopicConfig(settings.topic_config_path, settings.project_root)
+    topic_config = TopicConfig(settings.topic_config_path)
     tmux_manager = TmuxManager(
         sessions_dir=Path(settings.project_root) / settings.tmux_sessions_dir,
     )

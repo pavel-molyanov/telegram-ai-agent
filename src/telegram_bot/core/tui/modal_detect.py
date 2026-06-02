@@ -62,12 +62,6 @@ _FIRST_LINE_MIN_LEN = 10
 # the primary match mechanism.
 _CC_CONTINUATION_INDENT = "  "
 
-# Default settle time after `send-keys -l` before re-capturing. Measured
-# on real CC 2.1.117: input bar re-renders within ~100ms; 200ms is safely
-# above that with headroom for tmux refresh latency. Tunable via the
-# arg on verify_delivery for tests.
-DEFAULT_SETTLE_SEC = 0.2
-
 # Upper bound on a single capture-pane invocation. Protects send_direct
 # from a wedged tmux server hanging the whole request path indefinitely.
 # 5 s is generous — a healthy capture returns in single-digit ms.
@@ -358,55 +352,6 @@ def is_modal_present(pane: str) -> bool:
     lines = _strip_blank_tail(pane).splitlines()[-_MODAL_FOOTER_SCAN_LINES:]
     footer = "\n".join(lines)
     return bool(_MODAL_FOOTER_TOKEN_RE.search(footer))
-
-
-def prompt_visible_in_pane(pane_before: str, pane_after: str, prompt: str) -> bool:
-    """True if the prompt head is inside the input bar of `pane_after`
-    and was not already inside the input bar of `pane_before`.
-
-    Three delivery signals are accepted, tried in order:
-
-      1. Normalized-head substring match (primary). Both `head` and
-         `after_bar` are collapsed via `_ws_collapse` — all whitespace
-         runs become single spaces, leading/trailing whitespace stripped.
-         This neutralizes the two CC input-bar transforms that would
-         otherwise break a raw substring check:
-           - 2-space continuation indent (`_CC_CONTINUATION_INDENT`).
-           - Word-wrap replacing spaces with newlines on long lines
-             that overflow the visual frame width.
-         Empirically validated (CC 2.1.119, 18 payloads) — this path
-         catches the entire prod payload shape: text messages, photo/
-         document batches, reply-context, forwards, mixed batches.
-
-      2. `[Pasted text #N]` placeholder. CC collapses bracketed-paste
-         payloads above ~1500 chars into a literal placeholder — the
-         head never renders as text, but the placeholder itself is a
-         reliable signal that bytes reached the input buffer. Guarded
-         by a count check (`after > before`) so a stale placeholder from
-         a prior round-trip doesn't replay.
-
-      3. First-line-only substring fallback. If the normalized full head
-         somehow didn't match (unknown future CC transformation), the
-         first line of the head alone is a resilient signal — CC never
-         indents the first input-bar line, never word-wraps the very
-         beginning of a freshly pasted payload. Guarded by
-         `_FIRST_LINE_MIN_LEN` to prevent ultra-short first lines
-         (`"да"`, `"ok"`) from colliding with unrelated modal body text.
-
-    The guards close three separate false-positive classes:
-      (a) Modal overlay — `after` pane has no input bar
-          (`_input_bar_content` returns None via Gate A or Gate B).
-          Even if modal body contains substrings matching the prompt
-          head, we never report delivery. Security-critical — this is
-          what protects Enter from confirming a dialog item.
-      (b) Lingering scrollback — prompt was already in bar from a prior
-          send; `before_bar` match subtracts the lingering signal.
-      (c) Stale `[Pasted text #N]` — same placeholder persists across
-          the send; count-delta check neutralizes it.
-    """
-    after_bar = _input_bar_content(pane_after)
-    before_bar = _input_bar_content(pane_before)
-    return _prompt_visible_in_bar(before_bar, after_bar, prompt)
 
 
 def codex_prompt_visible_in_pane(pane_before: str, pane_after: str, prompt: str) -> bool:
