@@ -204,6 +204,8 @@ async def send_modal_alert(
             message_thread_id=channel_key[1],
         )
         message_id = getattr(sent, "message_id", "?")
+        if isinstance(message_id, int):
+            manager.set_tui_panel(channel_key, message_id)
         logger.info(
             "TUI_IO: modal alert posted session=%s channel=%s message_id=%s",
             state.session_name,
@@ -264,6 +266,8 @@ async def send_modal_idle_alert(
             message_thread_id=channel_key[1],
         )
         message_id = getattr(sent, "message_id", "?")
+        if isinstance(message_id, int):
+            manager.set_tui_panel(channel_key, message_id)
         logger.info(
             "TUI_IO: modal idle-alert posted session=%s channel=%s message_id=%s",
             state.session_name,

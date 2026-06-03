@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 router = Router(name="tail")
 
+
 # Telegram `<pre>` content cap — Telegram rejects messages >4096 chars total.
 # 3900 leaves headroom for the `<pre>...</pre>` wrapper and the truncation
 # prefix. Measured on escaped text, since HTML entities inflate length.
@@ -140,12 +141,27 @@ def _resolve_session_name(tmux_manager: TmuxManager, key: ChannelKey) -> str | N
 
 @router.message(F.text == t("ui.btn_tui"))
 async def handle_tui_button(message: Message, tmux_manager: TmuxManager) -> None:
-    """Reply-button shortcut for /tui. Aliases the same entry point so the
-    user can reach the TUI snapshot with one keyboard tap instead of
-    typing `/tui`."""
+    """Reply-button shortcut for /tui with toggle + cleanup behaviour.
+
+    Always deletes the trigger «TUI 🖥» message to keep chat history clean.
+    If a TUI panel is already open for this topic, closes it (toggle off).
+    Otherwise opens a new panel (toggle on).
+    """
+    key = channel_key(message)
+
+    with contextlib.suppress(Exception):
+        await message.delete()
+
+    existing_id = tmux_manager.pop_tui_panel(key)
+    if existing_id is not None:
+        with contextlib.suppress(Exception):
+            await message.bot.delete_message(message.chat.id, existing_id)  # type: ignore[union-attr]
+        return
+
     await _handle_tail_entry(
         message,
         tmux_manager,
+        use_reply=False,
         audit_source=AUDIT_SOURCE_TUI_BUTTON,
         audit_reason="user_pressed_tui_button",
     )
@@ -170,6 +186,7 @@ async def _handle_tail_entry(
     message: Message,
     tmux_manager: TmuxManager,
     *,
+    use_reply: bool = True,
     audit_source: str,
     audit_reason: str,
 ) -> None:
@@ -221,7 +238,10 @@ async def _handle_tail_entry(
     )
 
     logger.info("TUI_IO: /tui session=%s", session_name)
-    sent = await message.reply(pane_html, parse_mode="HTML", reply_markup=keyboard)
+    send = message.reply if use_reply else message.answer
+    sent = await send(pane_html, parse_mode="HTML", reply_markup=keyboard)
+    if isinstance(sent, Message):
+        tmux_manager.set_tui_panel(key, sent.message_id)
     log_alert_audit(
         source=audit_source,
         reason=audit_reason,
@@ -308,6 +328,7 @@ async def handle_tail_callback(callback: CallbackQuery, tmux_manager: TmuxManage
     # no new alert fires. `edit_reply_markup(None)` could be used instead
     # as a soft undo, but the user prefers a clean chat.
     if action == "close":
+        tmux_manager.pop_tui_panel(key)
         with contextlib.suppress(Exception):
             await message.delete()
         await callback.answer()

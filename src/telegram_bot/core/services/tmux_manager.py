@@ -260,6 +260,12 @@ class TmuxManager:
         # `_send_modal_alert` so user-initiated and watchdog-initiated
         # alerts de-duplicate against each other.
         self._last_modal_pane: dict[ChannelKey, str] = {}
+        # Tracks the Telegram message_id of the currently visible TUI panel
+        # (either a manual /tui panel or a modal alert) for each channel.
+        # Used by the TUI button toggle to close the active panel instead of
+        # opening a second one. Updated by both _handle_tail_entry (tail.py)
+        # and send_modal_alert / send_modal_idle_alert (tmux_modal_watchdog.py).
+        self._tui_panel_messages: dict[ChannelKey, int] = {}
         # Re-resolve `_check_channel_modal` on every tick so `patch.object(
         # mgr, "_check_channel_modal", ...)` in tests affects the running
         # loop; otherwise the method captured at ModalWatchdog init would
@@ -289,6 +295,12 @@ class TmuxManager:
     @_modal_watchdog_task.setter
     def _modal_watchdog_task(self, value: asyncio.Task[None] | None) -> None:
         self._modal_watchdog._task = value
+
+    def set_tui_panel(self, key: ChannelKey, message_id: int) -> None:
+        self._tui_panel_messages[key] = message_id
+
+    def pop_tui_panel(self, key: ChannelKey) -> int | None:
+        return self._tui_panel_messages.pop(key, None)
 
     def wire_live_buffer(self, *, bot: object, topic_config: object) -> None:
         """Attach the services needed to materialize LiveStatusBuffers.
@@ -1717,16 +1729,25 @@ class TmuxManager:
         # Offset is maintained incrementally by _tail_until_done — no
         # post-cancel recompute needed.
 
-    async def reconnect_tail(self, channel_key: ChannelKey) -> bool:
+    async def reconnect_tail(
+        self, channel_key: ChannelKey
+    ) -> Literal["started", "no_session", "no_transcript", "needs_first_message"]:
         """Cancel any stuck tail and restart streaming from the current offset.
 
         Does NOT touch the tmux session or Claude's context — only restarts
-        the Python-side transcript reader. Returns True if a new tail was
-        started, False if there is no active session or no transcript.
+        the Python-side transcript reader.
+
+        Returns:
+          "started"             — tail restarted successfully.
+          "no_session"          — no active tmux session for this channel.
+          "needs_first_message" — Nessy/Codex session alive but no transcript
+                                  yet; user must send the first prompt.
+          "no_transcript"       — session alive, transcript path known but
+                                  the file is missing (rare; suggest /clear).
         """
         state = self._sessions.get(channel_key)
         if state is None:
-            return False
+            return "no_session"
 
         # Cancel stuck tail without sending Escape to Claude.
         await self.close_buffer(channel_key)
@@ -1737,8 +1758,12 @@ class TmuxManager:
         await self._wait_for_tail_exit(channel_key, timeout=1.0)
 
         output_path = self._transcript_path_for_state(state)
-        if output_path is None or not output_path.exists():
-            return False
+        if output_path is None:
+            if state.provider in {"nessy", "codex"} and not state.session_id:
+                return "needs_first_message"
+            return "no_transcript"
+        if not output_path.exists():
+            return "no_transcript"
 
         started = await self._start_recovery_tail(
             channel_key, state, output_path, reason="reconnect"
@@ -1750,7 +1775,7 @@ class TmuxManager:
                 state.session_name,
                 state.offset,
             )
-        return started
+        return "started" if started else "no_transcript"
 
     async def _wait_for_tail_exit(self, channel_key: ChannelKey, timeout: float = 2.5) -> None:
         """Busy-wait up to `timeout` seconds for the tail's finally block
@@ -2132,6 +2157,7 @@ class TmuxManager:
         # Clear per-channel transient state except the lifecycle lock. Locks
         # are intentionally stable so waiters cannot split across old/new locks.
         self._last_modal_pane.pop(channel_key, None)
+        self._tui_panel_messages.pop(channel_key, None)
         self._spawn_deadlines.pop(channel_key, None)
         self._tui_start_snapshots.pop(channel_key, None)
 

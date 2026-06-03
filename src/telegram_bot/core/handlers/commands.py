@@ -15,7 +15,7 @@ from aiogram import F, Router
 from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.types.inaccessible_message import InaccessibleMessage
 
 from telegram_bot.core.handlers.forward import ForwardBatcher
@@ -158,6 +158,8 @@ async def _reset_channel(
     Dormant tmux → drop stale state and start a fresh TUI immediately.
     Otherwise → full subprocess reset + ui.new_session.
     """
+    is_group = message.chat.type == ChatType.SUPERGROUP
+    reply_kb = topic_keyboard() if is_group else None
     settings = topic_config.get_topic(key[1])
     if tmux_manager.is_active(key):
         # clear_context respawns the tmux session; _spawn_tmux can fail
@@ -168,12 +170,13 @@ async def _reset_channel(
             reset_live = await tmux_manager.clear_context(key, session_manager)
         except RuntimeError:
             logger.warning("clear_context failed for %s", key, exc_info=True)
-            await message.answer(t("ui.reset_failed"))
+            await message.answer(t("ui.reset_failed"), reply_markup=reply_kb)
             return
         if reset_live:
             session = session_manager._get_session(key)
             await message.answer(
-                t("ui.tmux_started_engine", engine=engine_display_name(session.engine))
+                t("ui.tmux_started_engine", engine=engine_display_name(session.engine)),
+                reply_markup=reply_kb,
             )
             return
         logger.info("clear_context found no live tmux for %s; starting fresh", key)
@@ -197,17 +200,18 @@ async def _reset_channel(
             )
         except RuntimeError:
             logger.warning("fresh tmux start failed for %s", key, exc_info=True)
-            await message.answer(t("ui.reset_failed"))
+            await message.answer(t("ui.reset_failed"), reply_markup=reply_kb)
             return
         await message.answer(
-            t("ui.tmux_started_engine", engine=engine_display_name(session.engine))
+            t("ui.tmux_started_engine", engine=engine_display_name(session.engine)),
+            reply_markup=reply_kb,
         )
         return
 
     forward_batcher.clear(key)
     await message_queue.clear(key)
     await session_manager.kill_session(key)
-    await message.answer(t("ui.new_session"))
+    await message.answer(t("ui.new_session"), reply_markup=reply_kb)
 
 
 @router.message(Command("new"))
@@ -282,9 +286,11 @@ async def handle_reconnect(message: Message, tmux_manager: TmuxManager) -> None:
     if not tmux_manager.is_active(key):
         await message.answer(t("ui.tmux_not_active"))
         return
-    started = await tmux_manager.reconnect_tail(key)
-    if started:
+    result = await tmux_manager.reconnect_tail(key)
+    if result == "started":
         await message.answer(t("ui.reconnect_started"))
+    elif result == "needs_first_message":
+        await message.answer(t("ui.reconnect_needs_first_message"))
     else:
         await message.answer(t("ui.reconnect_no_transcript"))
 
@@ -300,14 +306,16 @@ async def handle_resume(
 ) -> None:
     """Open server-side picker with resumable Claude/Codex sessions."""
     key = channel_key(message)
+    is_group = message.chat.type == ChatType.SUPERGROUP
+    reply_kb = topic_keyboard() if is_group else None
     if key[1] is None:
-        await message.answer(t("ui.resume_not_in_forum"))
+        await message.answer(t("ui.resume_not_in_forum"), reply_markup=reply_kb)
         return
 
     runtime = resolve_topic_runtime_config(topic_config.get_topic(key[1]), bot_defaults)
     entries = tuple(await asyncio.to_thread(list_sessions, runtime.cwd))
     if not entries:
-        await message.answer(t("ui.resume_no_sessions"))
+        await message.answer(t("ui.resume_no_sessions"), reply_markup=reply_kb)
         return
 
     token = picker_store.put(
@@ -374,13 +382,17 @@ async def _replay_last_assistant_message(
     if not content:
         return
 
-    for chunk in split_html_message(content):
+    is_group = message.chat.type == ChatType.SUPERGROUP
+    reply_kb = topic_keyboard() if is_group else None
+    chunks = split_html_message(content)
+    for i, chunk in enumerate(chunks):
+        kb: ReplyKeyboardMarkup | None = reply_kb if i == len(chunks) - 1 else None
 
-        async def _send_html(c: str = chunk) -> object:
-            return await message.answer(c, parse_mode="HTML")
+        async def _send_html(c: str = chunk, k: ReplyKeyboardMarkup | None = kb) -> object:
+            return await message.answer(c, parse_mode="HTML", reply_markup=k)
 
-        async def _send_plain(c: str = chunk) -> object:
-            return await message.answer(c)
+        async def _send_plain(c: str = chunk, k: ReplyKeyboardMarkup | None = kb) -> object:
+            return await message.answer(c, reply_markup=k)
 
         outcome = await send_html_with_fallback(
             send_html=_send_html,
@@ -695,6 +707,21 @@ async def on_exec_mode_click(
     except Exception:
         logger.debug("Failed to refresh exec_mode picker", exc_info=True)
     await callback.answer(t("ui.exec_mode_changed", mode=_exec_mode_label(new_mode)))
+
+
+@router.message(F.text == t("ui.btn_engine"))
+async def handle_engine_button(message: Message, topic_config: TopicConfig) -> None:
+    """Reply-keyboard Engine button — same as /engine."""
+    _, thread_id = channel_key(message)
+    if thread_id is None:
+        await message.answer(t("ui.engine_not_in_forum"))
+        return
+    settings = topic_config.get_topic(thread_id)
+    await message.answer(
+        t("ui.engine_picker_caption", engine=engine_display_name(settings.engine)),
+        reply_markup=engine_keyboard(settings.engine),
+        parse_mode="HTML",
+    )
 
 
 @router.message(Command("engine"))

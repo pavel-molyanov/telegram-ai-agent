@@ -28,6 +28,9 @@ def topic_keyboard() -> ReplyKeyboardMarkup:
             [
                 KeyboardButton(text=t("ui.btn_new_chat")),
                 KeyboardButton(text=t("ui.btn_cancel")),
+            ],
+            [
+                KeyboardButton(text=t("ui.btn_engine")),
                 KeyboardButton(text=t("ui.btn_tui")),
             ],
         ],
@@ -105,12 +108,6 @@ def engine_keyboard(current_engine: str | None = None) -> InlineKeyboardMarkup:
                     text=_engine_label("claude", "Claude Code"),
                     callback_data="engine:claude",
                 ),
-                InlineKeyboardButton(
-                    text=_engine_label("codex", "Codex"),
-                    callback_data="engine:codex",
-                ),
-            ],
-            [
                 InlineKeyboardButton(
                     text=_engine_label("nessy", "Nessy"),
                     callback_data="engine:nessy",

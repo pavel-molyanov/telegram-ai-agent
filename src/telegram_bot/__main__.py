@@ -30,8 +30,10 @@ from telegram_bot.core.middleware.auth import AuthMiddleware
 from telegram_bot.core.services.bot_commands import setup_bot_commands
 from telegram_bot.core.services.claude import SessionManager
 from telegram_bot.core.services.message_queue import MessageQueue
+from telegram_bot.core.services.picker_store import PickerStore
 from telegram_bot.core.services.tmux_manager import TmuxManager
 from telegram_bot.core.services.topic_config import TopicConfig
+from telegram_bot.core.services.topic_runtime import BotDefaults
 from telegram_bot.core.services.transcriber import Transcriber
 from telegram_bot.core.types import ChannelKey
 
@@ -147,6 +149,10 @@ async def _start() -> None:
     dp.include_router(tail_router)
     dp.include_router(text_router)
 
+    default_cwd = Path(settings.default_cwd)
+    if not default_cwd.is_absolute():
+        default_cwd = Path(settings.project_root) / default_cwd
+
     dp["session_manager"] = session_manager
     dp["transcriber"] = transcriber
     dp["forward_batcher"] = forward_batcher
@@ -155,6 +161,11 @@ async def _start() -> None:
     dp["settings"] = settings
     dp["topic_config"] = topic_config
     dp["tmux_manager"] = tmux_manager
+    dp["picker_store"] = PickerStore()
+    dp["bot_defaults"] = BotDefaults(
+        cwd=default_cwd,
+        mcp_config=Path(settings.project_root) / ".mcp.bot.json",
+    )
 
     ensure_tmp_dir(session_manager.file_cache_dir)
     cleanup_old_tmp_files(session_manager.file_cache_dir)

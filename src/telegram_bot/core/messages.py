@@ -49,6 +49,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.tmux_not_active": "No active tmux session in this topic",
         "ui.reconnect_started": "🔄 Tail reconnected — streaming resumed.",
         "ui.reconnect_no_transcript": "⚠️ Session active but no transcript found. Try /clear.",
+        "ui.reconnect_needs_first_message": "⏳ Session ready — send your first message to start.",
         "ui.engine_starting": (
             "🔄 {engine} is starting up — please wait a few seconds before sending."
         ),
@@ -170,6 +171,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.btn_new_chat": "New chat",
         "ui.btn_cancel": "Cancel ❌",
         "ui.btn_tui": "TUI 🖥",
+        "ui.btn_engine": "Engine ⚙️",
         # --- CC content prefixes (injected into prompts) --------------
         "cc.voice_transcript_short": "[Voice, transcription]:",
         "cc.voice_failed_full": "[Voice message: failed to transcribe]",
@@ -277,6 +279,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.tmux_not_active": "В этом топике нет активной tmux-сессии",
         "ui.reconnect_started": "🔄 Tail переподключён — стриминг возобновлён.",
         "ui.reconnect_no_transcript": "⚠️ Сессия активна, но transcript не найден. Попробуй /clear.",
+        "ui.reconnect_needs_first_message": "⏳ Сессия готова — отправь первое сообщение.",
         "ui.engine_starting": (
             "🔄 {engine} запускается — подожди несколько секунд перед отправкой."
         ),
@@ -399,6 +402,7 @@ MESSAGES: dict[str, dict[str, str]] = {
         "ui.btn_new_chat": "Новый чат",
         "ui.btn_cancel": "Отменить ❌",
         "ui.btn_tui": "TUI 🖥",
+        "ui.btn_engine": "Engine ⚙️",
         # CC content prefixes are intentionally English-only — see MESSAGES["en"].
         # --- Queue messages -------------------------------------------
         "ui.queue_added_batch": "Добавлено в батч, он №{position} в очереди",
