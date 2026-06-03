@@ -112,7 +112,7 @@ def test_topic_config_parses_public_runtime_fields(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    topic = TopicConfig(str(config_path), ".").get_topic(42)
+    topic = TopicConfig(str(config_path)).get_topic(42)
 
     assert topic.name == "Demo"
     assert topic.mode == "free"

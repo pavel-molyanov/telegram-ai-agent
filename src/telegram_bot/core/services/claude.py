@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING
 
 from telegram_bot.core.config import Settings
 from telegram_bot.core.messages import t
-from telegram_bot.core.services import cc_events as _cc_events
 from telegram_bot.core.services.bot_mcp_runtime import (
     default_bot_mcp_config,
     ensure_bot_runtime_mcp_config,

@@ -25,7 +25,6 @@ without re-running the failing send.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
@@ -139,15 +138,6 @@ class ModalWatchdog:
             return
         self._task = asyncio.create_task(self._loop(interval_sec), name="modal-watchdog")
         logger.info("TUI_IO: modal watchdog started interval=%.1fs", interval_sec)
-
-    async def stop(self) -> None:
-        task = self._task
-        self._task = None
-        if task is None:
-            return
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
 
     async def _loop(self, interval_sec: float) -> None:
         try:

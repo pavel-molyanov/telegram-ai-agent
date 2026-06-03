@@ -90,18 +90,9 @@ class LiveStatusBuffer:
     # --- Public API ---
 
     @property
-    def current_message_id(self) -> int:
-        """ID of the page currently being edited."""
-        return self._current_message_id
-
-    @property
     def message_ids(self) -> list[int]:
         """All pages posted by this buffer (for reply-to-resume recording)."""
         return list(self._message_ids)
-
-    @property
-    def closed(self) -> bool:
-        return self._closed
 
     async def append(self, line: str) -> None:
         """Record a status line. Never awaits Telegram — the worker does that."""
