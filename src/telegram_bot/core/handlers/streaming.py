@@ -10,7 +10,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from aiogram.enums import ChatType, ParseMode
+from aiogram import Bot
+from aiogram.enums import ChatAction, ChatType, ParseMode
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message
 from aiogram.utils.text_decorations import HtmlDecoration
@@ -549,6 +550,27 @@ async def _send_final_response(ctx: _StreamCtx, final_text: str) -> None:
             ctx.session_manager.record_message(msg_id, current_sid, ctx.channel_key)
 
 
+async def _typing_keepalive(bot: Bot, chat_id: int, thread_id: int | None) -> None:
+    """Keep Telegram's native "typing…" indicator alive in a topic.
+
+    The chat action auto-expires after ~5s, so re-send it on a short interval
+    until cancelled. Used in minimal stream_mode in place of the persistent
+    "Thinking…" placeholder. Failures are swallowed — a missing typing hint
+    must never break or delay response delivery.
+    """
+    try:
+        while True:
+            try:
+                await bot.send_chat_action(
+                    chat_id, ChatAction.TYPING, message_thread_id=thread_id
+                )
+            except Exception:
+                logger.debug("typing chat action failed on %s", chat_id, exc_info=True)
+            await asyncio.sleep(4.0)
+    except asyncio.CancelledError:
+        pass
+
+
 async def send_streaming_response(
     message: Message,
     session_manager: SessionManager,
@@ -584,8 +606,19 @@ async def send_streaming_response(
 
     cmd = prompt.split()[0] if prompt.startswith("/") else None
     thinking_text = t("ui.running_command", command=cmd) if cmd else t("ui.thinking")
-    thinking_msg = await message.answer(thinking_text, disable_notification=True)
-    sent_message_ids.append(thinking_msg.message_id)
+
+    # minimal mode: no persistent "Thinking…" bubble — show Telegram's native
+    # "typing…" chat action instead (refreshed in the background). live-mode
+    # reuses the placeholder as the editable buffer anchor and verbose relies
+    # on it as the leading progress marker, so those keep the text message.
+    typing_task: asyncio.Task[None] | None = None
+    if stream_mode == "minimal" and message.bot is not None:
+        typing_task = asyncio.create_task(
+            _typing_keepalive(message.bot, message.chat.id, channel_key[1])
+        )
+    else:
+        thinking_msg = await message.answer(thinking_text, disable_notification=True)
+        sent_message_ids.append(thinking_msg.message_id)
 
     used_tmux = tmux_manager is not None and tmux_manager.is_active(channel_key)
 
@@ -739,6 +772,12 @@ async def send_streaming_response(
         # Status messages ARE the history — no cleanup needed
         raise
     finally:
+        # Stop the native "typing…" keepalive (minimal mode) before the final
+        # response so the indicator clears as the answer lands.
+        if typing_task is not None:
+            typing_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await typing_task
         # Close the non-tmux live buffer if we owned one. In tmux mode the
         # buffer is owned by tmux_manager and stays alive across the tail —
         # it's closed when the next user message arrives or on /clear.
