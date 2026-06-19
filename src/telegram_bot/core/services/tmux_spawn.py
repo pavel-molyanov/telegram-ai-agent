@@ -17,12 +17,38 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
 from pathlib import Path
 
 from telegram_bot.core.types import ChannelKey
 
 logger = logging.getLogger(__name__)
+
+# Directory where `claude`/`codex`/`uv` live (user-local pip/npm installs).
+# Must be on PATH for the spawned TUI to find its own binary.
+_USER_LOCAL_BIN = str(Path.home() / ".local" / "bin")
+
+
+def tmux_env_flags() -> list[str]:
+    """`-e PATH=...` flags so the spawned session never depends on the tmux
+    server's global environment.
+
+    The bot spawns into whatever tmux server already owns the default socket
+    (often a long-lived `agent` session started at boot by systemd with a
+    stripped PATH). tmux's `update-environment` does NOT propagate PATH from
+    the client to an existing server's new sessions, so a bare `claude`
+    resolves against the server-global PATH — which lacks `~/.local/bin` and
+    makes the pane die instantly with "CC TUI start timeout". Passing PATH
+    explicitly with `-e` (tmux ≥3.2) pins it to the bot process's own PATH,
+    with `~/.local/bin` guaranteed present.
+    """
+    path = os.environ.get("PATH", "")
+    parts = path.split(os.pathsep) if path else []
+    if _USER_LOCAL_BIN not in parts:
+        parts.insert(0, _USER_LOCAL_BIN)
+    return ["-e", f"PATH={os.pathsep.join(parts)}"]
+
 
 # Shared clock for await_prompt_ready + transcript poll (Wave 2 Decision 7).
 SPAWN_READINESS_BUDGET_SEC = 30.0
@@ -134,6 +160,7 @@ def spawn_tmux_sync(
                 "200",
                 "-y",
                 "50",
+                *tmux_env_flags(),
                 *startup_cmd,
             ],
             capture_output=True,

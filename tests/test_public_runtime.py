@@ -167,3 +167,31 @@ def test_mcp_bot_server_imports() -> None:
     assert hasattr(module, "send_image")
     assert hasattr(module, "send_document")
     assert not hasattr(module, "send_file")
+
+
+def test_tmux_env_flags_pin_user_local_bin_on_path(monkeypatch) -> None:
+    """`tmux new-session -e PATH=...` must guarantee `~/.local/bin` up front.
+
+    Regression: the bot spawns into an existing tmux server (often a
+    systemd-launched session with a stripped PATH). tmux does not propagate
+    the client PATH to a running server's new sessions, so a bare `claude`
+    is unresolvable and the pane dies with "CC TUI start timeout". The `-e`
+    flag pins the bot's own PATH with `~/.local/bin` present.
+    """
+    from telegram_bot.core.services.tmux_spawn import _USER_LOCAL_BIN, tmux_env_flags
+
+    # PATH that lacks the user-local bin dir entirely.
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    flags = tmux_env_flags()
+    assert flags[0] == "-e"
+    assert flags[1].startswith("PATH=")
+    path_value = flags[1][len("PATH=") :]
+    parts = path_value.split(":")
+    assert parts[0] == _USER_LOCAL_BIN  # prepended, takes resolution priority
+    assert "/usr/bin" in parts and "/bin" in parts  # original entries preserved
+
+    # When already present, it must not be duplicated.
+    monkeypatch.setenv("PATH", f"/usr/bin:{_USER_LOCAL_BIN}:/bin")
+    flags = tmux_env_flags()
+    deduped = flags[1][len("PATH=") :].split(":")
+    assert deduped.count(_USER_LOCAL_BIN) == 1

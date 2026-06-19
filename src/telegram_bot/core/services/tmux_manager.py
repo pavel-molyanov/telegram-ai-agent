@@ -95,6 +95,7 @@ from telegram_bot.core.services.tmux_spawn import (
 from telegram_bot.core.services.tmux_spawn import (
     make_session_name,
     spawn_tmux_sync,
+    tmux_env_flags,
 )
 from telegram_bot.core.services.tmux_spawn import (
     query_pane_width as _query_pane_width,
@@ -670,6 +671,7 @@ class TmuxManager:
             "200",
             "-y",
             "50",
+            *tmux_env_flags(),
             *startup_cmd,
         ]
         result = await asyncio.to_thread(
