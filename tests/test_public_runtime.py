@@ -167,3 +167,28 @@ def test_mcp_bot_server_imports() -> None:
     assert hasattr(module, "send_image")
     assert hasattr(module, "send_document")
     assert not hasattr(module, "send_file")
+
+
+def test_runtime_mcp_config_uses_absolute_paths(tmp_path: Path, monkeypatch) -> None:
+    """A relative project_root must still yield absolute paths in the MCP config."""
+    import json as _json
+
+    from telegram_bot.core.services.bot_mcp_runtime import ensure_bot_runtime_mcp_config
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    runtime_path = project / "tmux_sessions" / "cc-1-2" / "mcp.runtime.json"
+
+    returned = ensure_bot_runtime_mcp_config(
+        base_mcp_config=None,
+        channel_key=(-100, 2),
+        runtime_path=runtime_path,
+        project_root=".",
+    )
+
+    assert Path(returned).is_absolute()
+    bot = _json.loads(runtime_path.read_text(encoding="utf-8"))["mcpServers"]["bot"]
+    assert Path(bot["args"][0]).is_absolute()
+    assert bot["args"][0].endswith("mcp-servers/bot/start.sh")
+    assert Path(bot["env"]["PROJECT_DIR"]).is_absolute()

@@ -99,7 +99,8 @@ async def _start() -> None:
 
     topic_config = TopicConfig(settings.topic_config_path, settings.project_root)
     tmux_manager = TmuxManager(
-        sessions_dir=Path(settings.project_root) / settings.tmux_sessions_dir,
+        # absolute: CC resolves --mcp-config against the topic cwd, not the bot's
+        sessions_dir=(Path(settings.project_root) / settings.tmux_sessions_dir).resolve(),
     )
     tmux_manager.wire_live_buffer(bot=bot, topic_config=topic_config)
     tmux_manager.restore_all()

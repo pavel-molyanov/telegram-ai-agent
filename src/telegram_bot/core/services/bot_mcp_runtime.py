@@ -79,7 +79,8 @@ def ensure_bot_runtime_mcp_config(
     from ``channel_key`` and the base config before every tmux respawn.
     """
     base_path = _resolve_base_config(base_mcp_config, runtime_path, project_root)
-    root = _project_root_from_base(base_path, project_root)
+    # absolute: start.sh / PROJECT_DIR must resolve from any topic cwd
+    root = _project_root_from_base(base_path, project_root).resolve()
     data = _load_mcp_config(base_path) if base_path is not None else {"mcpServers": {}}
     servers = data.get("mcpServers")
     if not isinstance(servers, dict):
