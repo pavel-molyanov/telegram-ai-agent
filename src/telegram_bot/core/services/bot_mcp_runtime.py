@@ -43,9 +43,9 @@ def _standard_bot_server(project_root: Path) -> dict[str, Any]:
 
 def _project_root_from_base(base_path: Path | None, project_root: str | Path | None) -> Path:
     if project_root is not None:
-        return Path(project_root)
+        return Path(project_root).resolve()
     if base_path is not None and base_path.name.startswith(".mcp"):
-        return base_path.parent
+        return base_path.parent.resolve()
     return Path.cwd()
 
 
