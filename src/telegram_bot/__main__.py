@@ -165,6 +165,7 @@ async def _start() -> None:
     # any text/forward handler tries to read mode/cwd for the new thread.
     dp.include_router(forum_topic_router)
     dp.include_router(commands_router)
+    dp.include_router(tail_router)
     dp.include_router(cancel_router)
     dp.include_router(tail_router)
     dp.include_router(mode_router)
