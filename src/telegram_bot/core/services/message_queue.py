@@ -97,6 +97,11 @@ class MessageQueue:
             return False
         return queue.lock.locked() or bool(queue.items)
 
+    def has_pending(self, channel_key: ChannelKey) -> bool:
+        """Return True when messages are waiting behind the active callback."""
+        queue = self._queues.get(channel_key)
+        return bool(queue and queue.items)
+
     def enqueue(
         self,
         channel_key: ChannelKey,

@@ -50,6 +50,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, fields, replace
+from enum import Enum
 from pathlib import Path
 from typing import Literal, cast
 
@@ -166,6 +167,12 @@ _POLL_STEP_SEC = 0.05  # fine-grained poll interval inside send_direct's pane-ve
 _ENTER_RETRY_SETTLE_SEC = 0.5
 _ENTER_RETRY_LIMIT = 3
 
+# A cold Codex start can accept the first prompt only after profile/plugin
+# initialization has continued well beyond the pane-level Enter retry window.
+# Keep transcript confirmation bounded, but allow enough time for the exact
+# prompt record to appear before presenting an unconfirmed-delivery warning.
+_CODEX_TRANSCRIPT_DISCOVERY_TIMEOUT_SEC = 60.0
+
 # Codex `_safe_send_codex` paste-visibility budget. The user payload is
 # pasted exactly once, then observed across three 1.5s polling windows.
 # Re-pasting an unobserved payload is unsafe: delayed bracketed-paste events
@@ -237,6 +244,14 @@ class SwitchResult:
     ]
     engine_changed: bool = False
     mode_changed: bool = False
+
+
+class _SafeSendOutcome(Enum):
+    """Result of guarded TUI prompt delivery."""
+
+    DELIVERED = "delivered"
+    BLOCKED = "blocked"
+    UNCERTAIN = "uncertain"
 
 
 class TmuxManager:
@@ -1322,30 +1337,59 @@ class TmuxManager:
         )
         return True
 
+    async def _safe_send_outcome(
+        self,
+        channel_key: ChannelKey,
+        state: TmuxSessionState,
+        prompt: str,
+    ) -> _SafeSendOutcome:
+        """Return the guarded delivery outcome without hiding uncertainty."""
+        if state.provider == "codex":
+            return await self._safe_send_codex(channel_key, state, prompt)
+        delivered = await self._send_with_modal_guard(channel_key, state, prompt)
+        return _SafeSendOutcome.DELIVERED if delivered else _SafeSendOutcome.BLOCKED
+
     async def _safe_send_and_enter(
         self,
         channel_key: ChannelKey,
         state: TmuxSessionState,
         prompt: str,
     ) -> bool:
-        """Capture → send-keys → verify-visible → pre-Enter re-capture → Enter.
+        """Compatibility wrapper for callers that need a boolean result.
 
-        Returns True iff Enter was sent cleanly. On any failure path it
-        posts a Telegram modal alert and returns False. Callers (send_direct
-        and send_stream) must react to False — send_direct rolls back its
-        "Thinking..." placeholder; send_stream must not start the tail
-        loop (CC would never emit a result_message, the tail would idle
-        until cancel).
+        The streaming path uses `_safe_send_outcome` directly so it can prove
+        an uncertain fresh Codex delivery from the newly-created transcript.
+        Other callers receive the existing bool contract and a conservative
+        unconfirmed-delivery warning.
 
         `send-keys Enter` on a modal would confirm the selected dialog
         item — potentially approving a shell command or switching the
         model. That risk dominates all trade-offs here.
         """
         session_name = state.session_name
-        if state.provider == "codex":
-            return await self._safe_send_codex(channel_key, state, prompt)
+        outcome = await self._safe_send_outcome(channel_key, state, prompt)
+        if outcome is _SafeSendOutcome.UNCERTAIN:
+            if state.session_id is not None:
+                # send_direct is used only for a live, already-tailed
+                # session. A successful Enter with no modal/tmux error is
+                # safer to hand to that authoritative transcript tail than
+                # to tell the user to resend and risk duplicate execution.
+                logger.info(
+                    "TUI_IO: codex direct delivery awaiting transcript session=%s",
+                    session_name,
+                )
+                return True
+            pane = await capture_pane(state.session_name)
+            await self._send_modal_alert(
+                channel_key,
+                state,
+                prompt,
+                pane,
+                reason="enter_delivery_unconfirmed",
+            )
+        return outcome is _SafeSendOutcome.DELIVERED
 
-        # Claude path: simplified modal-guard pipeline. The legacy paste-
+        # Legacy Claude paste-
         # retry / Enter-retry loop below is unreachable dead code, kept on
         # purpose for one iteration so a `git revert` of the dispatch line
         # restores the old behaviour without a textual conflict.
@@ -1358,8 +1402,6 @@ class TmuxManager:
         # the three direct-invocation tests of `_send_enter_until_prompt_clears`
         # in tests/test_tmux_wave3_fixes.py (lines 131, 164, 200) which only
         # pin the unreachable behaviour.
-        return await self._send_with_modal_guard(channel_key, state, prompt)
-
         baseline_captured_at = time.monotonic()
         pane_before = await capture_pane(session_name)
         if is_modal_present(pane_before):
@@ -1672,7 +1714,7 @@ class TmuxManager:
         channel_key: ChannelKey,
         state: TmuxSessionState,
         prompt: str,
-    ) -> bool:
+    ) -> _SafeSendOutcome:
         """Codex-specific send policy: Enter-only.
 
         Algorithm (post-2026-04-26 simplification — Tab branches removed):
@@ -1714,7 +1756,7 @@ class TmuxManager:
             await self._send_modal_alert(
                 channel_key, state, prompt, pane_before, reason="modal_before_send"
             )
-            return False
+            return _SafeSendOutcome.BLOCKED
 
         # Same lifecycle boundary as the Claude path above. The caller holds
         # the per-channel lock, so the watchdog cannot race this transition.
@@ -1727,7 +1769,7 @@ class TmuxManager:
             await self._send_modal_alert(
                 channel_key, state, prompt, pane_before, reason="paste_send_error"
             )
-            return False
+            return _SafeSendOutcome.BLOCKED
 
         pane_after = pane_before
         delivered = False
@@ -1759,7 +1801,7 @@ class TmuxManager:
                 await self._send_modal_alert(
                     channel_key, state, prompt, pane_after, reason="modal_during_paste"
                 )
-                return False
+                return _SafeSendOutcome.BLOCKED
             if delivered:
                 break
 
@@ -1787,7 +1829,7 @@ class TmuxManager:
                 pane_after or pane_before,
                 reason="paste_not_landed_after_retries",
             )
-            return False
+            return _SafeSendOutcome.BLOCKED
 
         pane_pre_enter = await capture_pane(session_name)
         if CODEX_ADAPTER.is_modal_present(pane_pre_enter):
@@ -1798,7 +1840,7 @@ class TmuxManager:
             await self._send_modal_alert(
                 channel_key, state, prompt, pane_pre_enter, reason="modal_after_paste"
             )
-            return False
+            return _SafeSendOutcome.BLOCKED
 
         if not pane_pre_enter or not self._codex_delivery_visible(
             pane_before, pane_pre_enter, prompt
@@ -1814,7 +1856,7 @@ class TmuxManager:
                 pane_pre_enter or pane_after,
                 reason="paste_visibility_lost_before_enter",
             )
-            return False
+            return _SafeSendOutcome.BLOCKED
 
         pane_current = pane_pre_enter
         for enter_attempt in range(1, _ENTER_RETRY_LIMIT + 1):
@@ -1829,7 +1871,7 @@ class TmuxManager:
                 await self._send_modal_alert(
                     channel_key, state, prompt, pane_current, reason="enter_send_error"
                 )
-                return False
+                return _SafeSendOutcome.BLOCKED
 
             await asyncio.sleep(_ENTER_RETRY_SETTLE_SEC)
             if (
@@ -1846,7 +1888,7 @@ class TmuxManager:
                     session_name,
                     enter_attempt,
                 )
-                return True
+                return _SafeSendOutcome.DELIVERED
 
             pane_after_enter = await capture_pane(session_name)
             if not pane_after_enter:
@@ -1862,7 +1904,7 @@ class TmuxManager:
                     pane_current,
                     reason="enter_capture_empty",
                 )
-                return False
+                return _SafeSendOutcome.BLOCKED
 
             if CODEX_ADAPTER.is_modal_present(pane_after_enter):
                 # A modal that surfaced AFTER our Enter is still cause to
@@ -1883,7 +1925,7 @@ class TmuxManager:
                     pane_after_enter,
                     reason="modal_after_enter",
                 )
-                return False
+                return _SafeSendOutcome.BLOCKED
 
             # Codex success signal: the input bar no longer carries our
             # prompt. Both delivery shapes — direct submit on idle and
@@ -1907,7 +1949,7 @@ class TmuxManager:
                         "TUI_IO: codex Enter accepted session=%s",
                         session_name,
                     )
-                return True
+                return _SafeSendOutcome.DELIVERED
 
             if enter_attempt < _ENTER_RETRY_LIMIT:
                 logger.info(
@@ -1922,14 +1964,12 @@ class TmuxManager:
             session_name,
             _ENTER_RETRY_LIMIT,
         )
-        await self._send_modal_alert(
-            channel_key,
-            state,
-            prompt,
-            pane_current,
-            reason="enter_did_not_clear_after_retries",
-        )
-        return False
+        # Enter was sent successfully, so a pane that still shows the prompt
+        # is not proof of rejection. Fresh Codex sessions can write the exact
+        # user message to a newly-created transcript just after this retry
+        # window. Let the caller perform bounded transcript discovery before
+        # presenting an unconfirmed-delivery warning.
+        return _SafeSendOutcome.UNCERTAIN
 
     @staticmethod
     def _codex_prompt_visible(pane: str, prompt: str) -> bool:
@@ -2461,13 +2501,51 @@ class TmuxManager:
                     codex_snapshot = CODEX_ADAPTER.capture_tui_transcript_snapshot()
 
                 self._cancel_events[channel_key] = cancel_event
-                delivered = await self._safe_send_and_enter(channel_key, state, prompt)
-                if not delivered:
+                outcome = await self._safe_send_outcome(channel_key, state, prompt)
+                if outcome is _SafeSendOutcome.BLOCKED:
                     # _safe_send_and_enter posted an alert; do not start tail.
                     return ""
+
+                codex_discovered = False
+                if outcome is _SafeSendOutcome.UNCERTAIN:
+                    if needs_codex_discovery and codex_snapshot is not None:
+                        try:
+                            await self._locate_codex_transcript_after_send(
+                                state,
+                                snapshot=codex_snapshot,
+                                prompt=prompt,
+                            )
+                        except RuntimeError:
+                            pane = await capture_pane(state.session_name)
+                            await self._send_modal_alert(
+                                channel_key,
+                                state,
+                                prompt,
+                                pane,
+                                reason="enter_delivery_unconfirmed",
+                            )
+                            return ""
+                        codex_discovered = True
+                        logger.info(
+                            "TUI_IO: codex delivery confirmed by fresh transcript session=%s",
+                            state.session_name,
+                        )
+                    else:
+                        # We successfully sent Enter and observed no modal or
+                        # tmux error.  On an established Codex session the
+                        # input bar can lag behind the transcript, so warning
+                        # the user to resend here can duplicate a request that
+                        # Codex already accepted.  Continue with the existing
+                        # transcript tail; it is the authoritative turn
+                        # signal for this session.
+                        logger.info(
+                            "TUI_IO: codex delivery awaiting existing transcript session=%s",
+                            state.session_name,
+                        )
+
                 self.mark_prompt_pending(channel_key)
 
-                if needs_codex_discovery and codex_snapshot is not None:
+                if needs_codex_discovery and codex_snapshot is not None and not codex_discovered:
                     try:
                         await self._locate_codex_transcript_after_send(
                             state,
@@ -3438,7 +3516,7 @@ class TmuxManager:
                 cwd=state.cwd,
                 snapshot=snapshot,
                 prompt=prompt,
-                timeout_sec=30.0,
+                timeout_sec=_CODEX_TRANSCRIPT_DISCOVERY_TIMEOUT_SEC,
             )
         except Exception:
             raise RuntimeError("Codex TUI transcript discovery failed") from None

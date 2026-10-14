@@ -42,6 +42,7 @@ _PANE_MAX_CHARS_CEILING = 3900
 _TRUNCATION_PREFIX = "... (truncated)\n"
 _DELIVERY_UNCONFIRMED_REASONS = frozenset(
     {
+        "enter_delivery_unconfirmed",
         "paste_not_landed_after_retries",
         "paste_visibility_lost_before_enter",
     }

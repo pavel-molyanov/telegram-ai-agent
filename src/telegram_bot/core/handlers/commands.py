@@ -368,7 +368,10 @@ async def handle_recycle(
     if not tmux_manager.is_active(key):
         await message.answer(t("ui.tmux_not_active"))
         return
-    if tmux_manager.is_processing(key) or message_queue.is_busy(key):
+    # A tmux transcript tail can keep MessageQueue's callback lock held after
+    # the provider turn has completed. Recycle owns tail cancellation, so only
+    # real provider work or messages still waiting in the queue should block it.
+    if tmux_manager.is_processing(key) or message_queue.has_pending(key):
         await message.answer(t("ui.exec_mode_busy"))
         return
     try:
