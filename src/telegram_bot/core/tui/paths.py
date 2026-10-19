@@ -41,7 +41,18 @@ def transcript_path(cwd: str | Path, session_id: str, home: Path | None = None) 
     if not _SESSION_ID_RE.fullmatch(session_id):
         raise ValueError(f"Invalid session_id: {session_id!r}")
     home = home or Path.home()
-    return home / ".claude" / "projects" / cwd_to_slug(cwd) / f"{session_id}.jsonl"
+    projects = home / ".claude" / "projects"
+    path = projects / cwd_to_slug(cwd) / f"{session_id}.jsonl"
+    if path.exists():
+        return path
+    # The session changed its cwd (EnterWorktree / ExitWorktree): CC moves the
+    # transcript into the new cwd's project dir, so the topic cwd no longer
+    # points at it. Session ids are unique, so look the file up across all
+    # projects and take the freshest match.
+    moved = list(projects.glob(f"*/{session_id}.jsonl"))
+    if moved:
+        return max(moved, key=lambda p: p.stat().st_mtime)
+    return path
 
 
 def generate_session_uuid() -> str:
