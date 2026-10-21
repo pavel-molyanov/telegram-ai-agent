@@ -88,4 +88,4 @@ Never commit `.env`, `.mcp*.json`, session JSON files, `tmux_sessions/`,
 
 For end-user installation and service setup, use `bot-setup`. For forum topic
 creation and project wiring, use `topic-setup`. Both skills must exist in
-`.claude/skills/` and `.codex/skills/`.
+`.claude/skills/` and `.agents/skills/`.

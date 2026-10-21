@@ -30,7 +30,3 @@ Operator skills:
 
 - `bot-setup` for installation, language, systemd autostart, commands, and troubleshooting.
 - `topic-setup` for Telegram forum topic creation and project wiring.
-
-## Semantic Vault Card
-
-Human-facing project context and repository navigation: `~/projects/ai-assistant/agent-brain/vault/knowledge/products/ai-assistant/ai-assistant.md`.

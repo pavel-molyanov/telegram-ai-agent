@@ -18,12 +18,12 @@ Allowed release paths:
 - `mcp-servers/`
 - `topic_config.example.json`
 - `.claude/`
-- `.codex/`
+- `.agents/`
 - `tests/`
 - `AGENTS.md`
 - `CLAUDE.md`
 
-Required public skills in both `.claude/skills/` and `.codex/skills/`:
+Required public skills in both `.claude/skills/` and `.agents/skills/`:
 
 - `project-knowledge`
 - `bot-setup`

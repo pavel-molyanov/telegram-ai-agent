@@ -124,7 +124,7 @@ uv sync
 В репозитории есть setup skills для обоих runtime:
 
 - `.claude/skills/bot-setup/SKILL.md`
-- `.codex/skills/bot-setup/SKILL.md`
+- `.agents/skills/bot-setup/SKILL.md`
 
 Для настройки forum topics попросите:
 
@@ -135,7 +135,7 @@ uv sync
 Topic setup skills лежат здесь:
 
 - `.claude/skills/topic-setup/SKILL.md`
-- `.codex/skills/topic-setup/SKILL.md`
+- `.agents/skills/topic-setup/SKILL.md`
 
 Агент должен спросить язык UI, default engine, execution mode и нужен ли
 systemd service.

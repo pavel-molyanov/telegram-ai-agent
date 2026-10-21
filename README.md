@@ -123,7 +123,7 @@ Set up this Telegram bot using the bot-setup skill.
 The repository ships setup skills for both runtimes:
 
 - `.claude/skills/bot-setup/SKILL.md`
-- `.codex/skills/bot-setup/SKILL.md`
+- `.agents/skills/bot-setup/SKILL.md`
 
 For forum topics, ask:
 
@@ -134,7 +134,7 @@ Create and configure Telegram forum topics using the topic-setup skill.
 The topic setup skills live in:
 
 - `.claude/skills/topic-setup/SKILL.md`
-- `.codex/skills/topic-setup/SKILL.md`
+- `.agents/skills/topic-setup/SKILL.md`
 
 The agent should ask for your UI language, default engine, execution mode, and
 whether to install a systemd service.
